@@ -1,7 +1,7 @@
 use airtable_flows::create_record;
 
 use anyhow;
-use chrono::{Duration, NaiveDate, NaiveDateTime, Utc};
+use chrono::{Duration, NaiveDate, NaiveDateTime, Utc, Timelike, Datelike};
 use dotenv::dotenv;
 use flowsnet_platform_sdk::logger;
 use github_flows::{get_octo, GithubLogin};
@@ -14,7 +14,9 @@ use std::env;
 #[no_mangle]
 #[tokio::main(flavor = "current_thread")]
 pub async fn on_deploy() {
-    schedule_cron_job(String::from("0 23 * * *"), String::from("cron_job_evoked")).await;
+    let cron_time = get_cron_time_with_date();
+    schedule_cron_job(cron_time, String::from("cron_job_evoked")).await;
+    // schedule_cron_job(String::from("0 23 * * *"), String::from("cron_job_evoked")).await;
 }
 
 #[schedule_handler]
@@ -24,9 +26,11 @@ async fn handler(body: Vec<u8>) {
     let owner = env::var("owner").unwrap_or("wasmedge".to_string());
     let repo = env::var("repo").unwrap_or("wasmedge".to_string());
 
-    let date = get_yesterday();
-    track_forks(&owner, &repo, &date).await;
-    track_stargazers(&owner, &repo, &date).await;
+    let now = Utc::now();
+    let one_day_ago = (now - Duration::days(1i64)).date_naive();
+
+    track_forks(&owner, &repo, &one_day_ago).await;
+    track_stargazers(&owner, &repo, &one_day_ago).await;
 }
 
 pub async fn upload_airtable(name: &str, email: &str, twitter_username: &str) {
@@ -47,21 +51,16 @@ pub async fn upload_airtable(name: &str, email: &str, twitter_username: &str) {
     );
 }
 
-// fn get_cron_time_with_date() -> String {
-//     let now = Local::now();
-//     let now_minute = now.minute() + 2;
-//     format!(
-//         "{:02} {:02} {:02} {:02} *",
-//         now_minute,
-//         now.hour(),
-//         now.day(),
-//         now.month(),
-//     )
-// }
-fn get_yesterday() -> NaiveDate {
+fn get_cron_time_with_date() -> String {
     let now = Utc::now();
-    let one_day_ago = (now - Duration::days(1i64)).date_naive();
-    one_day_ago
+    let now_minute = now.minute() + 2;
+    format!(
+        "{:02} {:02} {:02} {:02} *",
+        now_minute,
+        now.hour(),
+        now.day(),
+        now.month(),
+    )
 }
 
 async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Result<()> {
@@ -71,7 +70,7 @@ async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Resul
     let forks = octocrab
         .repos(owner.to_owned(), repo.to_owned())
         .list_forks()
-        .sort(Sort::Oldest)
+        .sort(Sort::Newest)
         .page(1u32)
         .per_page(100)
         .send()
