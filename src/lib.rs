@@ -1,7 +1,7 @@
 use airtable_flows::create_record;
 
 use anyhow;
-use chrono::{Duration, NaiveDate, NaiveDateTime, Utc, Timelike, Datelike};
+use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, Timelike, Utc};
 use dotenv::dotenv;
 use flowsnet_platform_sdk::logger;
 use github_flows::{get_octo, GithubLogin};
@@ -25,9 +25,11 @@ async fn handler(body: Vec<u8>) {
     logger::init();
     let owner = env::var("owner").unwrap_or("wasmedge".to_string());
     let repo = env::var("repo").unwrap_or("wasmedge".to_string());
+    let n_days_ago = env::var("n_days_ago").unwrap_or("7".to_string());
+    let n_days_ago = n_days_ago.parse::<i64>().unwrap_or(7);
 
     let now = Utc::now();
-    let one_day_ago = (now - Duration::days(1i64)).date_naive();
+    let one_day_ago = (now - Duration::days(n_days_ago)).date_naive();
 
     track_forks(&owner, &repo, &one_day_ago).await;
     track_stargazers(&owner, &repo, &one_day_ago).await;
@@ -93,6 +95,7 @@ async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Resul
 
         if let Some(o) = f.owner {
             let (name, email, twitter) = get_user_data(&o.login).await?;
+            log::info!("{} {} {}", name, email, twitter);
             upload_airtable(&name, &email, &twitter).await;
         }
     }
@@ -119,6 +122,8 @@ async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::
         }
         if let Some(u) = f.user {
             let (name, email, twitter) = get_user_data(&u.login).await?;
+            log::info!("{} {} {}", name, email, twitter);
+
             upload_airtable(&name, &email, &twitter).await;
         }
     }
@@ -165,6 +170,7 @@ pub async fn get_user_data(user: &str) -> anyhow::Result<(String, String, String
     let login = profile.login;
     let email = profile.email.unwrap_or("no email".to_string());
     let twitter_username = profile.twitter_username.unwrap_or("no twitter".to_string());
+    log::info!("{} {} {}", login, email, twitter_username);
 
     Ok((login, email, twitter_username))
 }
