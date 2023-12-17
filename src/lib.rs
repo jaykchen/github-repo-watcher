@@ -31,8 +31,12 @@ async fn handler(body: Vec<u8>) {
     let now = Utc::now();
     let one_day_ago = (now - Duration::days(n_days_ago)).date_naive();
 
-    track_forks(&owner, &repo, &one_day_ago).await;
-    track_stargazers(&owner, &repo, &one_day_ago).await;
+    if let Err(e) = track_forks(&owner, &repo, &one_day_ago).await {
+        log::error!("Failed to track forks: {:?}", e);
+    }
+    if let Err(e) = track_stargazers(&owner, &repo, &one_day_ago).await {
+        log::error!("Failed to track stargazers: {:?}", e);
+    }
 }
 
 pub async fn upload_airtable(name: &str, email: &str, twitter_username: &str) {
@@ -76,8 +80,15 @@ async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Resul
         .page(1u32)
         .per_page(100)
         .send()
-        .await?;
-
+        .await;
+    let forks = match forks {
+        Ok(f) => f,
+        Err(e) => {
+            let error_message = format!("Failed to list forks for {}/{}: {:?}", owner, repo, e);
+            log::error!("{}", &error_message);
+            return Err(anyhow::Error::new(e).context(error_message));
+        }
+    };
     for f in forks {
         let created_date = match f.created_at {
             Some(DateTimeOrU64::DateTime(dt)) => dt.naive_utc().date(),
@@ -110,7 +121,17 @@ async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::
         // .sort(Sort::CreatedAt)
         .per_page(100)
         .send()
-        .await?;
+        .await;
+
+    let page = match page {
+        Ok(f) => f,
+        Err(e) => {
+            let error_message =
+                format!("Failed to list stargazers for {}/{}: {:?}", owner, repo, e);
+            log::error!("{}", &error_message);
+            return Err(anyhow::Error::new(e).context(error_message));
+        }
+    };
     for f in page {
         let created_date = match f.starred_at {
             Some(dt) => dt.naive_utc().date(),
