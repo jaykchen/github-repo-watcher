@@ -4,8 +4,9 @@ use anyhow;
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, Timelike, Utc};
 use dotenv::dotenv;
 use flowsnet_platform_sdk::logger;
-use github_flows::{get_octo, GithubLogin};
-use octocrab_wasi::{models::DateTimeOrU64, Error as OctoError};
+// use github_flows::{get_octo, GithubLogin};
+// use octocrab_wasi::{models::DateTimeOrU64, Error as OctoError};
+use http_req::{request::Method, request::Request, response, uri::Uri};
 use schedule_flows::{schedule_cron_job, schedule_handler};
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -30,13 +31,14 @@ async fn handler(body: Vec<u8>) {
 
     let now = Utc::now();
     let one_day_ago = (now - Duration::days(n_days_ago)).date_naive();
+    let github_token = env::var("github_token").expect("Env var GITHUB_TOKEN is missing");
 
-    if let Err(e) = track_forks(&owner, &repo, &one_day_ago).await {
+    if let Err(e) = track_forks(&github_token, &owner, &repo, &one_day_ago).await {
         log::error!("Failed to track forks: {:?}", e);
     }
-    if let Err(e) = track_stargazers(&owner, &repo, &one_day_ago).await {
-        log::error!("Failed to track stargazers: {:?}", e);
-    }
+    // if let Err(e) = track_stargazers(&owner, &repo, &one_day_ago).await {
+    //     log::error!("Failed to track stargazers: {:?}", e);
+    // }
 }
 
 pub async fn upload_airtable(name: &str, email: &str, twitter_username: &str) {
@@ -69,7 +71,12 @@ fn get_cron_time_with_date() -> String {
     )
 }
 
-async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Result<()> {
+async fn track_forks(
+    github_token: &str,
+    owner: &str,
+    repo: &str,
+    date: &NaiveDate,
+) -> anyhow::Result<()> {
     #[derive(Serialize, Deserialize, Debug)]
     struct GraphQLResponse {
         data: Option<RepositoryData>,
@@ -109,7 +116,6 @@ async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Resul
         login: Option<String>,
     }
 
-    let octocrab = get_octo(&GithubLogin::Default);
     let first: i32 = 3; // Replace with the actual number of forks to retrieve
 
     let query = format!(
@@ -134,71 +140,72 @@ async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Resul
         owner, repo, first
     );
 
-    let response: Result<GraphQLResponse, OctoError> = octocrab.graphql(&query).await;
+    let base_url = "https://api.github.com/graphql";
 
-    match response {
-        Ok(data) => {
-            if let Some(edges) = data
-                .data
-                .and_then(|d| d.repository.and_then(|r| r.forks.and_then(|f| f.edges)))
-            {
-                for edge in edges {
-                    if let Some(node) = edge.node {
-                        if let (Some(login), Some(created_at_str)) =
-                            (node.owner.and_then(|o| o.login), node.created_at)
-                        {
-                            let fork_created_at = DateTime::parse_from_rfc3339(&created_at_str)?;
-                            let fork_date = fork_created_at.naive_utc().date();
+    let base_url = match Uri::try_from(base_url) {
+        Ok(url) => url,
+        Err(_) => return Err(anyhow::Error::msg("Invalid base URL")),
+    };
+    let res = github_http_post(github_token, &base_url.to_string(), &query)
+        .await
+        .ok_or_else(|| anyhow::Error::msg("Failed to send request or received error response"))?;
 
-                            if fork_date >= *date {
-                                let (name, email, twitter) = get_user_data(&login).await?;
-                                log::info!("{} {} {}", name, email, twitter);
-                                upload_airtable(&name, &email, &twitter).await;
-                            }
-                        }
+    let response: GraphQLResponse = serde_json::from_slice(&res)?;
+
+    if let Some(edges) = response
+        .data
+        .and_then(|d| d.repository.and_then(|r| r.forks.and_then(|f| f.edges)))
+    {
+        for edge in edges {
+            if let Some(node) = edge.node {
+                if let (Some(login), Some(created_at_str)) =
+                    (node.owner.and_then(|o| o.login), node.created_at)
+                {
+                    let fork_created_at = DateTime::parse_from_rfc3339(&created_at_str)?;
+                    let fork_date = fork_created_at.naive_utc().date();
+
+                    if fork_date >= *date {
+                        log::info!("{} ", login);
+                        // Use `?` to propagate potential errors from `get_user_data` and `upload_airtable`.
+                        // let (name, email, twitter) = get_user_data(&login).await?;
+                        // log::info!("{} {} {}", name, email, twitter);
+                        // upload_airtable(&name, &email, &twitter).await?;
                     }
                 }
             }
         }
-        Err(e) => {
-            // Handle the error from octocrab
-            eprintln!("Error querying GitHub GraphQL API: {}", e);
-            return Err(anyhow::Error::new(e).context("Failed to query GitHub GraphQL API"));
-        }
     }
-
-    // for f in forks {
-    //     let f_clone = f.clone(); // Clone the forks before debugging
-    //     dbg!(&f_clone); // Debug the cloned forks
-
-    //     // Serialize the clone to JSON, then take the first 300 characters
-    //     let json = serde_json::to_string(&f_clone)?;
-    //     let head = json.chars().take(300).collect::<String>();
-    //     log::info!("{}", head);
-
-    //     let created_date = match f.created_at {
-    //         Some(DateTimeOrU64::DateTime(dt)) => dt.naive_utc().date(),
-    //         Some(DateTimeOrU64::U64(timestamp)) => {
-    //             let naive_date_time = NaiveDateTime::from_timestamp_opt(timestamp as i64, 0)
-    //                 .ok_or_else(|| anyhow::Error::msg("Invalid timestamp"))?;
-    //             naive_date_time.date()
-    //         }
-    //         _ => continue, // Handle the case where created_at is None
-    //     };
-
-    //     if created_date < *date {
-    //         break;
-    //     }
-
-    //     if let Some(o) = f.owner {
-    //         let (name, email, twitter) = get_user_data(&o.login).await?;
-    //         log::info!("{} {} {}", name, email, twitter);
-    //         upload_airtable(&name, &email, &twitter).await;
-    //     }
-    // }
     Ok(())
 }
-async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Result<()> {
+
+pub async fn github_http_post(token: &str, base_url: &str, query: &str) -> Option<Vec<u8>> {
+    let base_url = Uri::try_from(base_url).unwrap();
+    let mut writer = Vec::new();
+
+    let query = serde_json::json!({"query": query});
+    match Request::new(&base_url)
+        .method(Method::POST)
+        .header("User-Agent", "flows-network connector")
+        .header("Content-Type", "application/json")
+        .header("Authorization", &format!("Bearer {}", token))
+        .header("Content-Length", &query.to_string().len())
+        .body(&query.to_string().into_bytes())
+        .send(&mut writer)
+    {
+        Ok(res) => {
+            if !res.status_code().is_success() {
+                log::error!("Github http error {:?}", res.status_code());
+                return None;
+            };
+            Some(writer)
+        }
+        Err(_e) => {
+            log::error!("Error getting response from Github: {:?}", _e);
+            None
+        }
+    }
+}
+/* async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Result<()> {
     let octocrab = get_octo(&GithubLogin::Default);
 
     let page = octocrab
@@ -235,9 +242,9 @@ async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::
         }
     }
     Ok(())
-}
+} */
 
-pub async fn get_user_data(user: &str) -> anyhow::Result<(String, String, String)> {
+/* pub async fn get_user_data(user: &str) -> anyhow::Result<(String, String, String)> {
     #[derive(Serialize, Deserialize, Debug)]
     struct UserProfile {
         login: String,
@@ -260,4 +267,4 @@ pub async fn get_user_data(user: &str) -> anyhow::Result<(String, String, String
     log::info!("{} {} {}", login, email, twitter_username);
 
     Ok((login, email, twitter_username))
-}
+} */
