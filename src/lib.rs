@@ -74,11 +74,11 @@ async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Resul
 
     let octocrab = get_octo(&GithubLogin::Default);
     let forks = octocrab
-        .repos(owner.to_owned(), repo.to_owned())
+        .repos(owner, repo)
         .list_forks()
         .sort(Sort::Newest)
         .page(1u32)
-        .per_page(100)
+        .per_page(35)
         .send()
         .await;
     let forks = match forks {
@@ -116,10 +116,10 @@ async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::
     let octocrab = get_octo(&GithubLogin::Default);
 
     let page = octocrab
-        .repos(owner.to_owned(), repo.to_owned())
+        .repos(owner, repo)
         .list_stargazers()
         // .sort(Sort::CreatedAt)
-        .per_page(100)
+        .per_page(35)
         .send()
         .await;
 
