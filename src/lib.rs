@@ -78,7 +78,7 @@ async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Resul
         .list_forks()
         .sort(Sort::Newest)
         .page(1u32)
-        .per_page(35)
+        .per_page(1)
         .send()
         .await;
     let forks = match forks {
@@ -86,10 +86,19 @@ async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Resul
         Err(e) => {
             let error_message = format!("Failed to list forks for {}/{}: {:?}", owner, repo, e);
             log::error!("{}", &error_message);
+
             return Err(anyhow::Error::new(e).context(error_message));
         }
     };
     for f in forks {
+        let f_clone = f.clone(); // Clone the forks before debugging
+        dbg!(&f_clone); // Debug the cloned forks
+
+        // Serialize the clone to JSON, then take the first 300 characters
+        let json = serde_json::to_string(&f_clone)?;
+        let head = json.chars().take(300).collect::<String>();
+        log::info!("{}", head);
+
         let created_date = match f.created_at {
             Some(DateTimeOrU64::DateTime(dt)) => dt.naive_utc().date(),
             Some(DateTimeOrU64::U64(timestamp)) => {
