@@ -166,10 +166,9 @@ async fn track_forks(
 
                     if fork_date >= *date {
                         log::info!("{} ", login);
-                        // Use `?` to propagate potential errors from `get_user_data` and `upload_airtable`.
-                        // let (name, email, twitter) = get_user_data(&login).await?;
-                        // log::info!("{} {} {}", name, email, twitter);
-                        // upload_airtable(&name, &email, &twitter).await?;
+                        let (name, email, twitter) = get_user_data(&github_token, &login).await?;
+                        log::info!("{} {} {}", name, email, twitter);
+                        upload_airtable(&name, &email, &twitter).await;
                     }
                 }
             }
@@ -195,10 +194,39 @@ pub async fn github_http_post(token: &str, base_url: &str, query: &str) -> Optio
         Ok(res) => {
             if !res.status_code().is_success() {
                 log::error!("Github http error {:?}", res.status_code());
-                log::debug!("Raw HTTP response body: {:?}", String::from_utf8_lossy(&writer));
-           
+                log::debug!(
+                    "Raw HTTP response body: {:?}",
+                    String::from_utf8_lossy(&writer)
+                );
+
                 return None;
             };
+            Some(writer)
+        }
+        Err(_e) => {
+            log::error!("Error getting response from Github: {:?}", _e);
+            None
+        }
+    }
+}
+
+pub async fn github_http_fetch(token: &str, url: &str) -> Option<Vec<u8>> {
+    let url = Uri::try_from(url).unwrap();
+    let mut writer = Vec::new();
+
+    match Request::new(&url)
+        .method(Method::GET)
+        .header("User-Agent", "flows-network connector")
+        .header("Content-Type", "application/vnd.github.v3+json")
+        .header("Authorization", &format!("Bearer {token}"))
+        .send(&mut writer)
+    {
+        Ok(res) => {
+            if !res.status_code().is_success() {
+                log::error!("Github http error {:?}", res.status_code());
+                return None;
+            };
+
             Some(writer)
         }
         Err(_e) => {
@@ -246,6 +274,43 @@ pub async fn github_http_post(token: &str, base_url: &str, query: &str) -> Optio
     Ok(())
 } */
 
+pub async fn get_user_data(
+    github_token: &str,
+    user: &str,
+) -> anyhow::Result<(String, String, String)> {
+    #[derive(Serialize, Deserialize, Debug)]
+    struct UserProfile {
+        login: String,
+        company: Option<String>,
+        blog: Option<String>,
+        location: Option<String>,
+        email: Option<String>,
+        twitter_username: Option<String>,
+    }
+
+    let user_profile_url = format!("https://api.github.com/users/{user}");
+
+    match github_http_fetch(&github_token, &user_profile_url).await {
+        Some(res) => match serde_json::from_slice::<UserProfile>(res.as_slice()) {
+            Ok(profile) => {
+                let login = profile.login;
+                let email = profile.email.unwrap_or("no email".to_string());
+                let twitter_username = profile.twitter_username.unwrap_or("no twitter".to_string());
+                log::info!("{} {} {}", login, email, twitter_username);
+
+                Ok((login, email, twitter_username))
+            }
+            Err(e) => {
+                log::error!("Failed to parse UserProfile: {:?}", e);
+                Err(anyhow::Error::msg("Failed to parse UserProfile"))
+            }
+        },
+        None => {
+            log::error!("GitHub user not found.");
+            Err(anyhow::Error::msg("NOT_FOUND"))
+        }
+    }
+}
 /* pub async fn get_user_data(user: &str) -> anyhow::Result<(String, String, String)> {
     #[derive(Serialize, Deserialize, Debug)]
     struct UserProfile {
