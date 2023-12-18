@@ -4,8 +4,6 @@ use anyhow;
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, Timelike, Utc};
 use dotenv::dotenv;
 use flowsnet_platform_sdk::logger;
-// use github_flows::{get_octo, GithubLogin};
-// use octocrab_wasi::{models::DateTimeOrU64, Error as OctoError};
 use http_req::{request::Method, request::Request, response, uri::Uri};
 use schedule_flows::{schedule_cron_job, schedule_handler};
 use serde::{Deserialize, Serialize};
@@ -331,45 +329,6 @@ async fn track_stargazers(
     Ok(())
 }
 
-/* async fn stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Result<()> {
-    let octocrab = get_octo(&GithubLogin::Default);
-
-    let page = octocrab
-        .repos(owner, repo)
-        .list_stargazers()
-        // .sort(Sort::CreatedAt)
-        .per_page(35)
-        .send()
-        .await;
-
-    let page = match page {
-        Ok(f) => f,
-        Err(e) => {
-            let error_message =
-                format!("Failed to list stargazers for {}/{}: {:?}", owner, repo, e);
-            log::error!("{}", &error_message);
-            return Err(anyhow::Error::new(e).context(error_message));
-        }
-    };
-    for f in page {
-        let created_date = match f.starred_at {
-            Some(dt) => dt.naive_utc().date(),
-            _ => continue, // Handle the case where starred_at is None
-        };
-
-        if created_date < *date {
-            break;
-        }
-        if let Some(u) = f.user {
-            let (name, email, twitter) = get_user_data(&u.login).await?;
-            log::info!("{} {} {}", name, email, twitter);
-
-            upload_airtable(&name, &email, &twitter).await;
-        }
-    }
-    Ok(())
-} */
-
 pub async fn get_user_data(
     github_token: &str,
     user: &str,
@@ -407,27 +366,4 @@ pub async fn get_user_data(
         }
     }
 }
-/* pub async fn get_user_data(user: &str) -> anyhow::Result<(String, String, String)> {
-    #[derive(Serialize, Deserialize, Debug)]
-    struct UserProfile {
-        login: String,
-        company: Option<String>,
-        blog: Option<String>,
-        location: Option<String>,
-        email: Option<String>,
-        twitter_username: Option<String>,
-    }
 
-    // let user_profile_url = format!("https://api.github.com/users/{user}");
-    let octocrab = get_octo(&GithubLogin::Default);
-
-    let user_profile_url = format!("/users/{}", user);
-
-    let profile: UserProfile = octocrab.get(user_profile_url.as_str(), None::<&()>).await?;
-    let login = profile.login;
-    let email = profile.email.unwrap_or("no email".to_string());
-    let twitter_username = profile.twitter_username.unwrap_or("no twitter".to_string());
-    log::info!("{} {} {}", login, email, twitter_username);
-
-    Ok((login, email, twitter_username))
-} */
