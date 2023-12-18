@@ -110,7 +110,7 @@ async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Resul
     }
 
     let octocrab = get_octo(&GithubLogin::Default);
-    let first: i32 = 3; // Replace with the actual number of forks to retrieve
+    let first: i32 = 50; // Replace with the actual number of forks to retrieve
 
     let query = format!(
         r#"
@@ -134,10 +134,12 @@ async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Resul
         owner, repo, first
     );
 
-    let response: Result<GraphQLResponse, OctoError> = octocrab.graphql(&query).await;
+    // let response: Result<GraphQLResponse, OctoError> = octocrab.graphql(&query).await;
 
-    match response {
-        Ok(data) => {
+    let parsed_data: Option<GraphQLResponse> = octocrab.graphql(&query).await.ok();
+
+    match parsed_data {
+        Some(data) => {
             if let Some(edges) = data
                 .data
                 .and_then(|d| d.repository.and_then(|r| r.forks.and_then(|f| f.edges)))
@@ -160,10 +162,8 @@ async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Resul
                 }
             }
         }
-        Err(e) => {
-            // Handle the error from octocrab
-            eprintln!("Error querying GitHub GraphQL API: {}", e);
-            return Err(anyhow::Error::new(e).context("Failed to query GitHub GraphQL API"));
+        None => {
+            return Err(anyhow::anyhow!("Failed to query GitHub GraphQL API"));
         }
     }
 
