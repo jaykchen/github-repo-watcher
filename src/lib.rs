@@ -134,10 +134,8 @@ async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Resul
 
     let octocrab = get_octo(&GithubLogin::Default);
 
-    let parsed_data: Option<GraphQLResponse> = octocrab.graphql(&query).await.ok();
-
-    match parsed_data {
-        Some(data) => {
+    match octocrab.graphql::<GraphQLResponse>(&query).await {
+        Ok(data) => {
             if let Some(edges) = data
                 .data
                 .and_then(|d| d.repository.and_then(|r| r.forks.and_then(|f| f.edges)))
@@ -149,6 +147,7 @@ async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Resul
                         {
                             let fork_created_at = DateTime::parse_from_rfc3339(&created_at_str)?;
                             let fork_date = fork_created_at.naive_utc().date();
+                            log::info!("forker login: {}, createdAt: {} ", login, created_at_str);
 
                             if fork_date >= *date {
                                 let (name, email, twitter) = get_user_data(&login).await?;
@@ -160,13 +159,16 @@ async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Resul
                 }
             }
         }
-        None => {
-            return Err(anyhow::anyhow!("Failed to query GitHub GraphQL API"));
+        Err(_e) => {
+            log::error!("Failed to query GitHub GraphQL API on forkers: {:?}", _e);
+            return Err(anyhow::anyhow!("Failed to query GitHub GraphQL API on forkers"));
         }
     }
 
     Ok(())
 }
+
+
 async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Result<()> {
     #[derive(Serialize, Deserialize, Debug)]
     struct GraphQLResponse {
@@ -191,7 +193,8 @@ async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::
     #[derive(Serialize, Deserialize, Debug)]
     struct StargazerEdge {
         node: Option<StargazerNode>,
-        starredAt: Option<String>,
+        #[serde(rename = "starredAt")]
+        starred_at: Option<String>,
     }
 
     #[derive(Serialize, Deserialize, Debug)]
@@ -222,19 +225,24 @@ async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::
     );
 
     let octocrab = get_octo(&GithubLogin::Default);
-    let parsed_data: Option<GraphQLResponse> = octocrab.graphql(&query).await.ok();
-    match parsed_data {
-        Some(data) => {
+
+    match octocrab.graphql::<GraphQLResponse>(&query).await {
+        Ok(data) => {
             if let Some(edges) = data.data.and_then(|d| {
                 d.repository
                     .and_then(|r| r.stargazers.and_then(|f| f.edges))
             }) {
                 for edge in edges {
-                    if let (Some(node), Some(ref starred_at_str)) = (edge.node, edge.starredAt) {
+                    if let (Some(node), Some(ref starred_at_str)) = (edge.node, edge.starred_at) {
                         if let Some(ref login) = node.login {
                             let stargazer_starred_at =
                                 DateTime::parse_from_rfc3339(&starred_at_str)?;
                             let stargazer_date = stargazer_starred_at.naive_utc().date();
+                            log::info!(
+                                "star giver login: {}, createdAt: {} ",
+                                login,
+                                starred_at_str
+                            );
 
                             if stargazer_date >= *date {
                                 log::info!("{} starred at {}", login, &starred_at_str);
@@ -247,8 +255,9 @@ async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::
                 }
             }
         }
-        None => {
-            return Err(anyhow::anyhow!("Failed to query GitHub GraphQL API"));
+        Err(_e) => {
+            log::error!("Failed to query GitHub GraphQL API on stargazers: {:?}", _e);
+            return Err(anyhow::anyhow!("Failed to query GitHub GraphQL API on stargazers"));
         }
     }
 
