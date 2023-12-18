@@ -72,41 +72,41 @@ fn get_cron_time_with_date() -> String {
 async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Result<()> {
     #[derive(Serialize, Deserialize, Debug)]
     struct GraphQLResponse {
-        data: RepositoryData,
+        data: Option<RepositoryData>,
     }
 
     #[derive(Serialize, Deserialize, Debug)]
     struct RepositoryData {
-        repository: Repository,
+        repository: Option<Repository>,
     }
 
     #[derive(Serialize, Deserialize, Debug)]
     struct Repository {
-        forks: ForkConnection,
+        forks: Option<ForkConnection>,
     }
 
     #[derive(Serialize, Deserialize, Debug)]
     struct ForkConnection {
-        edges: Vec<Edge>,
+        edges: Option<Vec<Edge>>,
     }
 
     #[derive(Serialize, Deserialize, Debug)]
     struct Edge {
-        node: ForkNode,
+        node: Option<ForkNode>,
     }
 
     #[derive(Serialize, Deserialize, Debug)]
     struct ForkNode {
-        id: String,
-        name: String,
-        owner: Owner,
+        id: Option<String>,
+        name: Option<String>,
+        owner: Option<Owner>,
         #[serde(rename = "createdAt")]
-        created_at: String, // You can use chrono::DateTime<Utc> for date-time handling
+        created_at: Option<String>, // You can use chrono::DateTime<Utc> for date-time handling
     }
 
     #[derive(Serialize, Deserialize, Debug)]
     struct Owner {
-        login: String,
+        login: Option<String>,
     }
 
     let octocrab = get_octo(&GithubLogin::Default);
@@ -138,16 +138,25 @@ async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Resul
 
     match response {
         Ok(data) => {
-            for edge in data.data.repository.forks.edges {
-                let fork_created_at = DateTime::parse_from_rfc3339(&edge.node.created_at)?;
-                let fork_date = fork_created_at.naive_utc().date();
-                log::info!("{} {}", &fork_created_at, &fork_date);
+            if let Some(edges) = data
+                .data
+                .and_then(|d| d.repository.and_then(|r| r.forks.and_then(|f| f.edges)))
+            {
+                for edge in edges {
+                    if let Some(node) = edge.node {
+                        if let (Some(login), Some(created_at_str)) =
+                            (node.owner.and_then(|o| o.login), node.created_at)
+                        {
+                            let fork_created_at = DateTime::parse_from_rfc3339(&created_at_str)?;
+                            let fork_date = fork_created_at.naive_utc().date();
 
-                if fork_date >= *date {
-                    let login = edge.node.owner.login.clone();
-                    let (name, email, twitter) = get_user_data(&login).await?;
-                    log::info!("{} {} {}", name, email, twitter);
-                    upload_airtable(&name, &email, &twitter).await;
+                            if fork_date >= *date {
+                                let (name, email, twitter) = get_user_data(&login).await?;
+                                log::info!("{} {} {}", name, email, twitter);
+                                upload_airtable(&name, &email, &twitter).await;
+                            }
+                        }
+                    }
                 }
             }
         }
