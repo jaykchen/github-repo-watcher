@@ -1,11 +1,11 @@
 use airtable_flows::create_record;
 
 use anyhow;
-use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, Timelike, Utc};
 use dotenv::dotenv;
 use flowsnet_platform_sdk::logger;
 use github_flows::{get_octo, GithubLogin};
-use octocrab_wasi::models::DateTimeOrU64;
+use octocrab_wasi::{models::DateTimeOrU64, Error as OctoError};
 use schedule_flows::{schedule_cron_job, schedule_handler};
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -70,55 +70,123 @@ fn get_cron_time_with_date() -> String {
 }
 
 async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Result<()> {
-    use octocrab_wasi::params::repos::forks::Sort;
+    #[derive(Serialize, Deserialize, Debug)]
+    struct GraphQLResponse {
+        data: RepositoryData,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct RepositoryData {
+        repository: Repository,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct Repository {
+        forks: ForkConnection,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct ForkConnection {
+        edges: Vec<Edge>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct Edge {
+        node: ForkNode,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct ForkNode {
+        id: String,
+        name: String,
+        owner: Owner,
+        #[serde(rename = "createdAt")]
+        created_at: String, // You can use chrono::DateTime<Utc> for date-time handling
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct Owner {
+        login: String,
+    }
 
     let octocrab = get_octo(&GithubLogin::Default);
-    let forks = octocrab
-        .repos(owner, repo)
-        .list_forks()
-        .sort(Sort::Newest)
-        .page(1u32)
-        .per_page(1)
-        .send()
-        .await;
-    let forks = match forks {
-        Ok(f) => f,
-        Err(e) => {
-            let error_message = format!("Failed to list forks for {}/{}: {:?}", owner, repo, e);
-            log::error!("{}", &error_message);
+    let first: i32 = 3; // Replace with the actual number of forks to retrieve
 
-            return Err(anyhow::Error::new(e).context(error_message));
-        }
-    };
-    for f in forks {
-        let f_clone = f.clone(); // Clone the forks before debugging
-        dbg!(&f_clone); // Debug the cloned forks
+    let query = format!(
+        r#"
+        query {{
+            repository(owner: "{}", name: "{}") {{
+                forks(first: {}, orderBy: {{field: CREATED_AT, direction: DESC}}) {{
+                    edges {{
+                        node {{
+                            id
+                            name
+                            owner {{
+                                login
+                            }}
+                            createdAt
+                        }}
+                    }}
+                }}
+            }}
+        }}
+        "#,
+        owner, repo, first
+    );
 
-        // Serialize the clone to JSON, then take the first 300 characters
-        let json = serde_json::to_string(&f_clone)?;
-        let head = json.chars().take(300).collect::<String>();
-        log::info!("{}", head);
+    let response: Result<GraphQLResponse, OctoError> = octocrab.graphql(&query).await;
 
-        let created_date = match f.created_at {
-            Some(DateTimeOrU64::DateTime(dt)) => dt.naive_utc().date(),
-            Some(DateTimeOrU64::U64(timestamp)) => {
-                let naive_date_time = NaiveDateTime::from_timestamp_opt(timestamp as i64, 0)
-                    .ok_or_else(|| anyhow::Error::msg("Invalid timestamp"))?;
-                naive_date_time.date()
+    match response {
+        Ok(data) => {
+            for edge in data.data.repository.forks.edges {
+                let fork_created_at = DateTime::parse_from_rfc3339(&edge.node.created_at)?;
+                let fork_date = fork_created_at.naive_utc().date();
+                log::info!("{} {}", &fork_created_at, &fork_date);
+
+                if fork_date >= *date {
+                    let login = edge.node.owner.login.clone();
+                    let (name, email, twitter) = get_user_data(&login).await?;
+                    log::info!("{} {} {}", name, email, twitter);
+                    upload_airtable(&name, &email, &twitter).await;
+                }
             }
-            _ => continue, // Handle the case where created_at is None
-        };
-
-        if created_date < *date {
-            break;
         }
-
-        if let Some(o) = f.owner {
-            let (name, email, twitter) = get_user_data(&o.login).await?;
-            log::info!("{} {} {}", name, email, twitter);
-            upload_airtable(&name, &email, &twitter).await;
+        Err(e) => {
+            // Handle the error from octocrab
+            eprintln!("Error querying GitHub GraphQL API: {}", e);
+            return Err(anyhow::Error::new(e).context("Failed to query GitHub GraphQL API"));
         }
     }
+
+    // for f in forks {
+    //     let f_clone = f.clone(); // Clone the forks before debugging
+    //     dbg!(&f_clone); // Debug the cloned forks
+
+    //     // Serialize the clone to JSON, then take the first 300 characters
+    //     let json = serde_json::to_string(&f_clone)?;
+    //     let head = json.chars().take(300).collect::<String>();
+    //     log::info!("{}", head);
+
+    //     let created_date = match f.created_at {
+    //         Some(DateTimeOrU64::DateTime(dt)) => dt.naive_utc().date(),
+    //         Some(DateTimeOrU64::U64(timestamp)) => {
+    //             let naive_date_time = NaiveDateTime::from_timestamp_opt(timestamp as i64, 0)
+    //                 .ok_or_else(|| anyhow::Error::msg("Invalid timestamp"))?;
+    //             naive_date_time.date()
+    //         }
+    //         _ => continue, // Handle the case where created_at is None
+    //     };
+
+    //     if created_date < *date {
+    //         break;
+    //     }
+
+    //     if let Some(o) = f.owner {
+    //         let (name, email, twitter) = get_user_data(&o.login).await?;
+    //         log::info!("{} {} {}", name, email, twitter);
+    //         upload_airtable(&name, &email, &twitter).await;
+    //     }
+    // }
     Ok(())
 }
 async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Result<()> {
@@ -158,27 +226,7 @@ async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::
         }
     }
     Ok(())
-    // let result = octocrab.all_pages(page).await.unwrap();
-    // assert_eq!(result.len(), 3);
-    // assert_eq!(result[0].owner.as_ref().unwrap().login, login1);
 }
-
-/* async fn track_watcher() {
-    use octocrab::{params::repos::forks::Sort, Octocrab};
-
-    let octocrab = get_octo(&GithubLogin::Default);
-    let owner = env::var("owner").unwrap_or("wasmedge".to_string());
-    let repo = env::var("repo").unwrap_or("wasmedge".to_string());
-
-    let page = octocrab
-        .repos(owner.to_owned(), repo.to_owned())
-        .list_watchers()
-        .per_page(100)
-        .sort(octocrab::params::stargazers::Sort::CreatedAt)
-        .send()
-        .await
-        .unwrap();
-} */
 
 pub async fn get_user_data(user: &str) -> anyhow::Result<(String, String, String)> {
     #[derive(Serialize, Deserialize, Debug)]
