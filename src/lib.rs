@@ -195,6 +195,8 @@ pub async fn github_http_post(token: &str, base_url: &str, query: &str) -> Optio
         Ok(res) => {
             if !res.status_code().is_success() {
                 log::error!("Github http error {:?}", res.status_code());
+                log::debug!("Raw HTTP response body: {:?}", String::from_utf8_lossy(&writer));
+           
                 return None;
             };
             Some(writer)
