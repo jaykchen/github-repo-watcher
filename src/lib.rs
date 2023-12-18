@@ -36,9 +36,9 @@ async fn handler(body: Vec<u8>) {
     if let Err(e) = track_forks(&github_token, &owner, &repo, &one_day_ago).await {
         log::error!("Failed to track forks: {:?}", e);
     }
-    // if let Err(e) = track_stargazers(&owner, &repo, &one_day_ago).await {
-    //     log::error!("Failed to track stargazers: {:?}", e);
-    // }
+    if let Err(e) = track_stargazers(&github_token, &owner, &repo, &one_day_ago).await {
+        log::error!("Failed to track stargazers: {:?}", e);
+    }
 }
 
 pub async fn upload_airtable(name: &str, email: &str, twitter_username: &str) {
@@ -116,7 +116,7 @@ async fn track_forks(
         login: Option<String>,
     }
 
-    let first: i32 = 3; // Replace with the actual number of forks to retrieve
+    let first: i32 = 50;
 
     let query = format!(
         r#"
@@ -235,7 +235,103 @@ pub async fn github_http_fetch(token: &str, url: &str) -> Option<Vec<u8>> {
         }
     }
 }
-/* async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Result<()> {
+
+async fn track_stargazers(
+    github_token: &str,
+    owner: &str,
+    repo: &str,
+    date: &NaiveDate,
+) -> anyhow::Result<()> {
+    #[derive(Serialize, Deserialize, Debug)]
+    struct GraphQLResponse {
+        data: Option<RepositoryData>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct RepositoryData {
+        repository: Option<Repository>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct Repository {
+        stargazers: Option<StargazerConnection>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct StargazerConnection {
+        edges: Option<Vec<StargazerEdge>>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct StargazerEdge {
+        node: Option<StargazerNode>,
+        starredAt: Option<String>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct StargazerNode {
+        id: Option<String>,
+        login: Option<String>,
+    }
+
+    let first: i32 = 50; // You can adjust this to your preferred page size
+
+    let query = format!(
+        r#"
+        query {{
+            repository(owner: "{}", name: "{}") {{
+                stargazers(first: {}, orderBy: {{field: STARRED_AT, direction: DESC}}) {{
+                    edges {{
+                        node {{
+                            id
+                            login
+                        }}
+                        starredAt
+                    }}
+                }}
+            }}
+        }}
+        "#,
+        owner, repo, first
+    );
+
+    let base_url = "https://api.github.com/graphql";
+
+    let base_url = match Uri::try_from(base_url) {
+        Ok(url) => url,
+        Err(_) => return Err(anyhow::Error::msg("Invalid base URL")),
+    };
+    let res = github_http_post(github_token, &base_url.to_string(), &query)
+        .await
+        .ok_or_else(|| anyhow::Error::msg("Failed to send request or received error response"))?;
+
+    let response: GraphQLResponse = serde_json::from_slice(&res)?;
+
+    if let Some(edges) = response.data.and_then(|d| {
+        d.repository
+            .and_then(|r| r.stargazers.and_then(|s| s.edges))
+    }) {
+        for edge in edges {
+            if let (Some(node), Some(starred_at_str)) = (edge.node, edge.starredAt) {
+                if let Some(login) = node.login {
+                    let stargazer_starred_at = DateTime::parse_from_rfc3339(&starred_at_str)?;
+                    let stargazer_date = stargazer_starred_at.naive_utc().date();
+
+                    if stargazer_date >= *date {
+                        log::info!("{} starred at {}", login, starred_at_str);
+                        let (name, email, twitter) = get_user_data(github_token, &login).await?;
+                        log::info!("{} {} {}", name, email, twitter);
+                        upload_airtable(&name, &email, &twitter).await;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/* async fn stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Result<()> {
     let octocrab = get_octo(&GithubLogin::Default);
 
     let page = octocrab
