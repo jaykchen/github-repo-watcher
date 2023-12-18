@@ -147,7 +147,14 @@ async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Resul
                         {
                             let fork_created_at = DateTime::parse_from_rfc3339(&created_at_str)?;
                             let fork_date = fork_created_at.naive_utc().date();
-                            log::info!("forker login: {}, createdAt: {} ", login, created_at_str);
+                            let fork_date_str = fork_date.format("%Y-%m-%d").to_string();
+                            let date_str = date.format("%Y-%m-%d").to_string();
+                            log::info!(
+                                "forker login: {}, createdAt: {} vs date: {}",
+                                login,
+                                fork_date_str,
+                                date_str
+                            );
 
                             if fork_date >= *date {
                                 let (name, email, twitter) = get_user_data(&login).await?;
@@ -161,13 +168,14 @@ async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Resul
         }
         Err(_e) => {
             log::error!("Failed to query GitHub GraphQL API on forkers: {:?}", _e);
-            return Err(anyhow::anyhow!("Failed to query GitHub GraphQL API on forkers"));
+            return Err(anyhow::anyhow!(
+                "Failed to query GitHub GraphQL API on forkers"
+            ));
         }
     }
 
     Ok(())
 }
-
 
 async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Result<()> {
     #[derive(Serialize, Deserialize, Debug)]
@@ -238,10 +246,13 @@ async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::
                             let stargazer_starred_at =
                                 DateTime::parse_from_rfc3339(&starred_at_str)?;
                             let stargazer_date = stargazer_starred_at.naive_utc().date();
+                            let starred_date_str = stargazer_date.format("%Y-%m-%d").to_string();
+                            let date_str = date.format("%Y-%m-%d").to_string();
                             log::info!(
-                                "star giver login: {}, createdAt: {} ",
+                                "star giver login: {}, createdAt: {} vs date: {}",
                                 login,
-                                starred_at_str
+                                starred_date_str,
+                                date_str
                             );
 
                             if stargazer_date >= *date {
@@ -257,7 +268,9 @@ async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::
         }
         Err(_e) => {
             log::error!("Failed to query GitHub GraphQL API on stargazers: {:?}", _e);
-            return Err(anyhow::anyhow!("Failed to query GitHub GraphQL API on stargazers"));
+            return Err(anyhow::anyhow!(
+                "Failed to query GitHub GraphQL API on stargazers"
+            ));
         }
     }
 
