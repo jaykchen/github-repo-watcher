@@ -1,10 +1,9 @@
 use airtable_flows::create_record;
 use anyhow;
-use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, Timelike, Utc};
 use dotenv::dotenv;
 use flowsnet_platform_sdk::logger;
 use github_flows::{get_octo, GithubLogin};
-// use octocrab_wasi::{models::DateTimeOrU64, Error as OctoError};
 use schedule_flows::{schedule_cron_job, schedule_handler};
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -24,11 +23,11 @@ async fn handler(body: Vec<u8>) {
     logger::init();
     let owner = env::var("owner").unwrap_or("wasmedge".to_string());
     let repo = env::var("repo").unwrap_or("wasmedge".to_string());
-    let n_days_ago = env::var("n_days_ago").unwrap_or("7".to_string());
 
-    let n_days_ago = n_days_ago.parse::<i64>().unwrap_or(7);
+    // let n_days_ago = env::var("n_days_ago").unwrap_or("7".to_string());
+    // let n_days_ago = n_days_ago.parse::<i64>().unwrap_or(7);
     let now = Utc::now();
-    let n_days_ago = (now - Duration::days(n_days_ago)).date_naive();
+    let n_days_ago = (now - Duration::days(1)).date_naive();
 
     if let Err(e) = track_forks(&owner, &repo, &n_days_ago).await {
         log::error!("Failed to track forks: {:?}", e);
@@ -108,7 +107,7 @@ async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Resul
         login: Option<String>,
     }
 
-    let first: i32 = 50;
+    let first: i32 = 100;
 
     let query = format!(
         r#"
@@ -211,7 +210,7 @@ async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::
         login: Option<String>,
     }
 
-    let first: i32 = 50; // You can adjust this to your preferred page size
+    let first: i32 = 100; // You can adjust this to your preferred page size
 
     let query = format!(
         r#"
@@ -277,56 +276,6 @@ async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::
     Ok(())
 }
 
-/* pub async fn get_user_data(user: &str) -> anyhow::Result<(String, String, String)> {
-    #[derive(Serialize, Deserialize, Debug)]
-    struct UserProfile {
-        login: String,
-        company: Option<String>,
-        blog: Option<String>,
-        location: Option<String>,
-        email: Option<String>,
-        twitter_username: Option<String>,
-    }
-
-    // let user_profile_url = format!("https://api.github.com/users/{user}");
-    let octocrab = get_octo(&GithubLogin::Default);
-
-    let user_profile_url = format!("/users/{}", user);
-
-    let response = octocrab
-        .get::<String, _, ()>(user_profile_url, None::<&()>)
-        .await;
-    match response {
-        Ok(json_string) => {
-            // Log or print the raw JSON string for inspection
-            log::debug!("Raw JSON string: {}", json_string);
-
-            // Now attempt to deserialize the JSON string into UserProfile
-            let profile: UserProfile = serde_json::from_str(&json_string)?;
-
-            let login = profile.login;
-            let email = profile.email.unwrap_or_else(|| "no email".to_string());
-            let twitter_username = profile
-                .twitter_username
-                .unwrap_or_else(|| "no twitter".to_string());
-            log::info!(
-                "Login: {}, Email: {}, Twitter: {}",
-                login,
-                email,
-                twitter_username
-            );
-
-            Ok((login, email, twitter_username))
-        }
-        Err(e) => {
-            log::error!("Failed to get user profile: {:?}", e);
-            Err(anyhow::anyhow!("Failed to query GitHub user profile API"))
-        }
-    }
-} */
-
-// use github_flows::octocrab::Octocrab;
-
 async fn get_user_data(username: &str) -> anyhow::Result<(String, String, String)> {
     #[derive(Serialize, Deserialize, Debug)]
     struct UserProfile {
@@ -338,9 +287,6 @@ async fn get_user_data(username: &str) -> anyhow::Result<(String, String, String
         twitter_username: Option<String>,
     }
 
-    // let github_token = env::var("github_token").expect("GITHUB_TOKEN not set");
-
-    // let octocrab = Octocrab::builder().personal_token(github_token).build()?;
     let octocrab = get_octo(&GithubLogin::Default);
     let user_profile_url = format!("users/{}", username);
 
@@ -364,8 +310,7 @@ async fn get_user_data(username: &str) -> anyhow::Result<(String, String, String
             Ok((login, email, twitter_username))
         }
         Err(e) => {
-            // Handle the error, e.g., by logging or converting it into an application-specific error.
-            log::error!("Failed to get user profile for {}: {:?}", username, e);
+            log::error!("Failed to get user info for {}: {:?}", username, e);
 
             Err(e.into())
         }
