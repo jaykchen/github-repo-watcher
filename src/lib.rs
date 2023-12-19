@@ -325,7 +325,7 @@ async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::
     }
 } */
 
-use github_flows::octocrab::Octocrab;
+// use github_flows::octocrab::Octocrab;
 
 async fn get_user_data(username: &str) -> anyhow::Result<(String, String, String)> {
     #[derive(Serialize, Deserialize, Debug)]
@@ -338,9 +338,10 @@ async fn get_user_data(username: &str) -> anyhow::Result<(String, String, String
         twitter_username: Option<String>,
     }
 
-    let github_token = env::var("github_token").expect("GITHUB_TOKEN not set");
+    // let github_token = env::var("github_token").expect("GITHUB_TOKEN not set");
 
-    let octocrab = Octocrab::builder().personal_token(github_token).build()?;
+    // let octocrab = Octocrab::builder().personal_token(github_token).build()?;
+    let octocrab = get_octo(&GithubLogin::Default);
     let user_profile_url = format!("users/{}", username);
 
     match octocrab
