@@ -12,7 +12,7 @@ use std::env;
 #[no_mangle]
 #[tokio::main(flavor = "current_thread")]
 pub async fn on_deploy() {
-    schedule_cron_job(String::from("0 23 * * *"), String::from("cron_job_evoked")).await;
+    schedule_cron_job(String::from("0 52 * * *"), String::from("cron_job_evoked")).await;
 }
 
 #[schedule_handler]
@@ -33,15 +33,16 @@ async fn handler(body: Vec<u8>) {
     }
 }
 
-pub async fn upload_airtable(name: &str, email: &str, twitter_username: &str) {
+pub async fn upload_airtable(login: &str, email: &str, twitter_username: &str, watching: bool) {
     let airtable_token_name = env::var("airtable_token_name").unwrap_or("github".to_string());
     let airtable_base_id = env::var("airtable_base_id").unwrap_or("appmhvMGsMRPmuUWJ".to_string());
     let airtable_table_name = env::var("airtable_table_name").unwrap_or("mention".to_string());
 
     let data = serde_json::json!({
-        "Name": name,
+        "Name": login,
         "Email": email,
         "Twitter": twitter_username,
+        "Watching": watching,
     });
     let _ = create_record(
         &airtable_token_name,
@@ -132,9 +133,10 @@ async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Resul
                             let fork_date = fork_created_at.naive_utc().date();
 
                             if fork_date >= *date {
-                                let (name, email, twitter) = get_user_data(&login).await?;
-                                log::info!("{} {} {}", name, email, twitter);
-                                upload_airtable(&name, &email, &twitter).await;
+                                let (email, twitter) = get_user_data(&login).await?;
+                                log::info!("{} {} {}", &login, email, twitter);
+                                let is_watching = subscribed_or_not(owner, repo, &login).await?;
+                                upload_airtable(&login, &email, &twitter, is_watching).await;
                             }
                         }
                     }
@@ -218,9 +220,10 @@ async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::
                             let stargazer_date = stargazer_starred_at.naive_utc().date();
 
                             if stargazer_date >= *date {
-                                let (name, email, twitter) = get_user_data(&login).await?;
-                                log::info!("{} {} {}", name, email, twitter);
-                                upload_airtable(&name, &email, &twitter).await;
+                                let (email, twitter) = get_user_data(&login).await?;
+                                log::info!("{} {} {}", &login, email, twitter);
+                                let is_watching = subscribed_or_not(owner, repo, &login).await?;
+                                upload_airtable(&login, &email, &twitter, is_watching).await;
                             }
                         }
                     }
@@ -233,7 +236,7 @@ async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::
     Ok(())
 }
 
-async fn get_user_data(username: &str) -> anyhow::Result<(String, String, String)> {
+async fn get_user_data(login: &str) -> anyhow::Result<(String, String)> {
     #[derive(Serialize, Deserialize, Debug)]
     struct UserProfile {
         login: String,
@@ -245,22 +248,140 @@ async fn get_user_data(username: &str) -> anyhow::Result<(String, String, String
     }
 
     let octocrab = get_octo(&GithubLogin::Default);
-    let user_profile_url = format!("users/{}", username);
+    let user_profile_url = format!("users/{}", login);
 
     match octocrab
         .get::<UserProfile, _, ()>(&user_profile_url, None::<&()>)
         .await
     {
         Ok(profile) => {
-            let login = profile.login;
             let email = profile.email.unwrap_or("no email".to_string());
             let twitter_username = profile.twitter_username.unwrap_or("no twitter".to_string());
 
-            Ok((login, email, twitter_username))
+            Ok((email, twitter_username))
         }
         Err(e) => {
-            log::error!("Failed to get user info for {}: {:?}", username, e);
+            log::error!("Failed to get user info for {}: {:?}", login, e);
             Err(e.into())
         }
     }
+}
+
+async fn subscribed_or_not(owner: &str, repo: &str, user_login: &str) -> anyhow::Result<bool> {
+    #[derive(Serialize, Deserialize, Debug)]
+    struct GraphQLResponse {
+        data: Option<UserData>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct UserData {
+        user: Option<User>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct User {
+        watching: Option<WatchingConnection>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct WatchingConnection {
+        edges: Option<Vec<WatchingEdge>>,
+        #[serde(rename = "pageInfo")]
+        page_info: Option<PageInfo>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct WatchingEdge {
+        node: Option<WatchingNode>,
+        cursor: Option<String>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct WatchingNode {
+        name: Option<String>,
+        #[serde(rename = "createdAt")]
+        created_at: Option<String>,
+        owner: Option<UserOwner>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct UserOwner {
+        login: Option<String>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct PageInfo {
+        #[serde(rename = "endCursor")]
+        end_cursor: Option<String>,
+        #[serde(rename = "hasNextPage")]
+        has_next_page: Option<bool>,
+    }
+
+    let last: i32 = 100; // You can adjust this to your preferred page size
+
+    let query = format!(
+        r#"
+        query {{
+            user(login: "{}") {{
+                watching(last: {}) {{
+                    edges {{
+                        node {{
+                            name
+                            createdAt
+                            owner {{
+                                login
+                            }}
+                        }}
+                        cursor
+                    }}
+                    pageInfo {{
+                        endCursor
+                        hasNextPage
+                    }}
+                }}
+            }}
+        }}
+        "#,
+        user_login,
+        last // Insert the variables directly into the string
+    );
+
+    let octocrab = get_octo(&GithubLogin::Default);
+
+    match octocrab.graphql::<GraphQLResponse>(&query).await {
+        Ok(response) => {
+            if let Some(data) = response.data {
+                if let Some(u) = data.user {
+                    if let Some(watching) = u.watching {
+                        if let Some(edges) = watching.edges {
+                            for edge in edges {
+                                if let Some(node) = edge.node {
+                                    if let Some(repo) = node.name {
+                                        log::info!("Checking repo: {}", repo);
+
+                                        if let Some(o) = node.owner {
+                                            if let Some(owner_login) = o.login {
+                                                log::info!("Checking owner: {}", owner_login);
+
+                                                if owner_login == owner && repo == repo {
+                                                    return Ok(true);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(_e) => log::error!(
+            "Failed to query GitHub GraphQL API on user {} for watching repo: {:?}",
+            user_login,
+            _e
+        ),
+    }
+
+    Ok(false)
 }
