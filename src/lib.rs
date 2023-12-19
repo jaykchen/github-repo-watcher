@@ -277,7 +277,7 @@ async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::
     Ok(())
 }
 
-pub async fn get_user_data(user: &str) -> anyhow::Result<(String, String, String)> {
+/* pub async fn get_user_data(user: &str) -> anyhow::Result<(String, String, String)> {
     #[derive(Serialize, Deserialize, Debug)]
     struct UserProfile {
         login: String,
@@ -319,9 +319,52 @@ pub async fn get_user_data(user: &str) -> anyhow::Result<(String, String, String
             Ok((login, email, twitter_username))
         }
         Err(e) => {
-            // Log the error if the request fails
             log::error!("Failed to get user profile: {:?}", e);
             Err(anyhow::anyhow!("Failed to query GitHub user profile API"))
+        }
+    }
+} */
+
+use github_flows::octocrab::Octocrab;
+
+async fn get_user_data(username: &str) -> anyhow::Result<(String, String, String)> {
+    #[derive(Serialize, Deserialize, Debug)]
+    struct UserProfile {
+        login: String,
+        company: Option<String>,
+        blog: Option<String>,
+        location: Option<String>,
+        email: Option<String>,
+        twitter_username: Option<String>,
+    }
+
+    let octocrab = Octocrab::builder().build()?;
+    let user_profile_url = format!("users/{}", username);
+
+    match octocrab
+        .get::<UserProfile, _, ()>(&user_profile_url, None::<&()>)
+        .await
+    {
+        Ok(profile) => {
+            let login = profile.login;
+            let email = profile.email.unwrap_or_else(|| "no email".to_string());
+            let twitter_username = profile
+                .twitter_username
+                .unwrap_or_else(|| "no twitter".to_string());
+            log::info!(
+                "Login: {}, Email: {}, Twitter: {}",
+                login,
+                email,
+                twitter_username
+            );
+
+            Ok((login, email, twitter_username))
+        }
+        Err(e) => {
+            // Handle the error, e.g., by logging or converting it into an application-specific error.
+            log::error!("Failed to get user profile for {}: {:?}", username, e);
+
+            Err(e.into())
         }
     }
 }
