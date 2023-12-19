@@ -12,7 +12,7 @@ use std::env;
 #[no_mangle]
 #[tokio::main(flavor = "current_thread")]
 pub async fn on_deploy() {
-    schedule_cron_job(String::from("0 52 * * *"), String::from("cron_job_evoked")).await;
+    schedule_cron_job(String::from("0 55 * * *"), String::from("cron_job_evoked")).await;
 }
 
 #[schedule_handler]
@@ -267,7 +267,7 @@ async fn get_user_data(login: &str) -> anyhow::Result<(String, String)> {
     }
 }
 
-async fn subscribed_or_not(owner: &str, repo: &str, user_login: &str) -> anyhow::Result<bool> {
+async fn subscribed_or_not(owner: &str, _repo: &str, user_login: &str) -> anyhow::Result<bool> {
     #[derive(Serialize, Deserialize, Debug)]
     struct GraphQLResponse {
         data: Option<UserData>,
@@ -363,7 +363,7 @@ async fn subscribed_or_not(owner: &str, repo: &str, user_login: &str) -> anyhow:
                                             if let Some(owner_login) = o.login {
                                                 log::info!("Checking owner: {}", owner_login);
 
-                                                if owner_login == owner && repo == repo {
+                                                if owner_login == owner && repo == _repo {
                                                     return Ok(true);
                                                 }
                                             }
