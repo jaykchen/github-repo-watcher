@@ -338,7 +338,9 @@ async fn get_user_data(username: &str) -> anyhow::Result<(String, String, String
         twitter_username: Option<String>,
     }
 
-    let octocrab = Octocrab::builder().build()?;
+    let github_token = env::var("github_token").expect("GITHUB_TOKEN not set");
+
+    let octocrab = Octocrab::builder().personal_token(github_token).build()?;
     let user_profile_url = format!("users/{}", username);
 
     match octocrab
