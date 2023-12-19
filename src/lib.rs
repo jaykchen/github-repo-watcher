@@ -294,19 +294,25 @@ pub async fn get_user_data(user: &str) -> anyhow::Result<(String, String, String
     let user_profile_url = format!("/users/{}", user);
 
     match octocrab
-        .get::<UserProfile, _, ()>(user_profile_url, None::<&()>)
+        .get::<serde_json::Value, _, ()>(user_profile_url, None::<&()>)
+        // .get::<UserProfile, _, ()>(user_profile_url, None::<&()>)
         .await
     {
         Ok(profile) => {
-            let login = profile.login;
-            let email = profile.email.unwrap_or("no email".to_string());
-            let twitter_username = profile.twitter_username.unwrap_or("no twitter".to_string());
+
+            let login = profile["login"].as_str().unwrap_or("no login").to_owned();
+            let email = profile["email"].as_str().unwrap_or("no email").to_owned();
+            let twitter_username = profile["twitter_username"].as_str().unwrap_or("no twitter").to_owned();
+            // let login = profile.login;
+            // let email = profile.email.unwrap_or("no email".to_string());
+            // let twitter_username = profile.twitter_username.unwrap_or("no twitter".to_string());
             log::info!("{} {} {}", login, email, twitter_username);
 
             Ok((login, email, twitter_username))
         }
 
         Err(_e) => {
+
             log::error!("Failed to get user profile: {:?}", _e);
             return Err(anyhow::anyhow!("Failed to query GitHub user profile API"));
         }
