@@ -12,7 +12,7 @@ use std::env;
 #[no_mangle]
 #[tokio::main(flavor = "current_thread")]
 pub async fn on_deploy() {
-    schedule_cron_job(String::from("59 0 * * *"), String::from("cron_job_evoked")).await;
+    schedule_cron_job(String::from("8 * * * *"), String::from("cron_job_evoked")).await;
 }
 
 #[schedule_handler]
