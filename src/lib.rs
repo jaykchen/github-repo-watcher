@@ -1,6 +1,6 @@
 use airtable_flows::create_record;
 use anyhow;
-use chrono::{DateTime, Datelike, Duration, NaiveDate, Timelike, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use dotenv::dotenv;
 use flowsnet_platform_sdk::logger;
 use github_flows::{get_octo, GithubLogin};
@@ -12,9 +12,7 @@ use std::env;
 #[no_mangle]
 #[tokio::main(flavor = "current_thread")]
 pub async fn on_deploy() {
-    let cron_time = get_cron_time_with_date();
-    schedule_cron_job(cron_time, String::from("cron_job_evoked")).await;
-    // schedule_cron_job(String::from("0 23 * * *"), String::from("cron_job_evoked")).await;
+    schedule_cron_job(String::from("0 23 * * *"), String::from("cron_job_evoked")).await;
 }
 
 #[schedule_handler]
@@ -24,8 +22,6 @@ async fn handler(body: Vec<u8>) {
     let owner = env::var("owner").unwrap_or("wasmedge".to_string());
     let repo = env::var("repo").unwrap_or("wasmedge".to_string());
 
-    // let n_days_ago = env::var("n_days_ago").unwrap_or("7".to_string());
-    // let n_days_ago = n_days_ago.parse::<i64>().unwrap_or(7);
     let now = Utc::now();
     let n_days_ago = (now - Duration::days(1)).date_naive();
 
@@ -53,18 +49,6 @@ pub async fn upload_airtable(name: &str, email: &str, twitter_username: &str) {
         &airtable_table_name,
         data.clone(),
     );
-}
-
-fn get_cron_time_with_date() -> String {
-    let now = Utc::now();
-    let now_minute = now.minute() + 2;
-    format!(
-        "{:02} {:02} {:02} {:02} *",
-        now_minute,
-        now.hour(),
-        now.day(),
-        now.month(),
-    )
 }
 
 async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Result<()> {
@@ -146,14 +130,6 @@ async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Resul
                         {
                             let fork_created_at = DateTime::parse_from_rfc3339(&created_at_str)?;
                             let fork_date = fork_created_at.naive_utc().date();
-                            let fork_date_str = fork_date.format("%Y-%m-%d").to_string();
-                            let date_str = date.format("%Y-%m-%d").to_string();
-                            log::info!(
-                                "forker login: {}, createdAt: {} vs date: {}",
-                                login,
-                                fork_date_str,
-                                date_str
-                            );
 
                             if fork_date >= *date {
                                 let (name, email, twitter) = get_user_data(&login).await?;
@@ -165,12 +141,7 @@ async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Resul
                 }
             }
         }
-        Err(_e) => {
-            log::error!("Failed to query GitHub GraphQL API on forkers: {:?}", _e);
-            return Err(anyhow::anyhow!(
-                "Failed to query GitHub GraphQL API on forkers"
-            ));
-        }
+        Err(_e) => log::error!("Failed to query GitHub GraphQL API on forkers: {:?}", _e),
     }
 
     Ok(())
@@ -245,17 +216,8 @@ async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::
                             let stargazer_starred_at =
                                 DateTime::parse_from_rfc3339(&starred_at_str)?;
                             let stargazer_date = stargazer_starred_at.naive_utc().date();
-                            let starred_date_str = stargazer_date.format("%Y-%m-%d").to_string();
-                            let date_str = date.format("%Y-%m-%d").to_string();
-                            log::info!(
-                                "star giver login: {}, createdAt: {} vs date: {}",
-                                login,
-                                starred_date_str,
-                                date_str
-                            );
 
                             if stargazer_date >= *date {
-                                log::info!("{} starred at {}", login, &starred_at_str);
                                 let (name, email, twitter) = get_user_data(&login).await?;
                                 log::info!("{} {} {}", name, email, twitter);
                                 upload_airtable(&name, &email, &twitter).await;
@@ -265,12 +227,7 @@ async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::
                 }
             }
         }
-        Err(_e) => {
-            log::error!("Failed to query GitHub GraphQL API on stargazers: {:?}", _e);
-            return Err(anyhow::anyhow!(
-                "Failed to query GitHub GraphQL API on stargazers"
-            ));
-        }
+        Err(_e) => log::error!("Failed to query GitHub GraphQL API on stargazers: {:?}", _e),
     }
 
     Ok(())
@@ -296,22 +253,13 @@ async fn get_user_data(username: &str) -> anyhow::Result<(String, String, String
     {
         Ok(profile) => {
             let login = profile.login;
-            let email = profile.email.unwrap_or_else(|| "no email".to_string());
-            let twitter_username = profile
-                .twitter_username
-                .unwrap_or_else(|| "no twitter".to_string());
-            log::info!(
-                "Login: {}, Email: {}, Twitter: {}",
-                login,
-                email,
-                twitter_username
-            );
+            let email = profile.email.unwrap_or("no email".to_string());
+            let twitter_username = profile.twitter_username.unwrap_or("no twitter".to_string());
 
             Ok((login, email, twitter_username))
         }
         Err(e) => {
             log::error!("Failed to get user info for {}: {:?}", username, e);
-
             Err(e.into())
         }
     }
