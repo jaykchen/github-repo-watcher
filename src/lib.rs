@@ -1,6 +1,6 @@
 use airtable_flows::create_record;
 use anyhow;
-use chrono::{DateTime, Duration, NaiveDate, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc, Datelike, Timelike};
 use dotenv::dotenv;
 use flowsnet_platform_sdk::logger;
 use github_flows::{get_octo, GithubLogin};
@@ -12,7 +12,18 @@ use std::env;
 #[no_mangle]
 #[tokio::main(flavor = "current_thread")]
 pub async fn on_deploy() {
-    schedule_cron_job(String::from("7 * * * *"), String::from("cron_job_evoked")).await;
+    // schedule_cron_job(String::from("0 11 * * *"), String::from("cron_job_evoked")).await;
+
+    let now = Utc::now();
+    let now_minute = now.minute() + 2;
+    let cron_time = format!(
+        "{:02} {:02} {:02} {:02} *",
+        now_minute,
+        now.hour(),
+        now.day(),
+        now.month(),
+    );
+    schedule_cron_job(cron_time, String::from("cron_job_evoked")).await;
 }
 
 #[schedule_handler]
@@ -445,7 +456,6 @@ async fn watcher_or_not(owner: &str, repo: &str, user_login: &str) -> anyhow::Re
 
     let octocrab = get_octo(&GithubLogin::Default);
 
-
     match octocrab.graphql::<GraphQLResponse>(&query).await {
         Ok(response) => {
             if let Some(data) = response.data {
@@ -454,9 +464,9 @@ async fn watcher_or_not(owner: &str, repo: &str, user_login: &str) -> anyhow::Re
                         if let Some(edges) = watchers.edges {
                             for edge in edges {
                                 if let Some(node) = edge.node {
-                                   if user_login == node.login {
-                                    return Ok(true);
-                                   }
+                                    if user_login == node.login {
+                                        return Ok(true);
+                                    }
                                 }
                             }
                         }
