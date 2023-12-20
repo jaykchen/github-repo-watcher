@@ -12,7 +12,7 @@ use std::env;
 #[no_mangle]
 #[tokio::main(flavor = "current_thread")]
 pub async fn on_deploy() {
-    schedule_cron_job(String::from("20 * * * *"), String::from("cron_job_evoked")).await;
+    schedule_cron_job(String::from("7 * * * *"), String::from("cron_job_evoked")).await;
 }
 
 #[schedule_handler]
@@ -135,7 +135,8 @@ async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Resul
                             if fork_date >= *date {
                                 let (email, twitter) = get_user_data(&login).await?;
                                 log::info!("{} {} {}", &login, email, twitter);
-                                let is_watching = subscribed_or_not(owner, repo, &login).await?;
+                                let is_watching = watcher_or_not(owner, repo, &login).await?;
+                                // let is_watching = subscribed_or_not(owner, repo, &login).await?;
                                 upload_airtable(&login, &email, &twitter, is_watching).await;
                             }
                         }
@@ -222,7 +223,8 @@ async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::
                             if stargazer_date >= *date {
                                 let (email, twitter) = get_user_data(&login).await?;
                                 log::info!("{} {} {}", &login, email, twitter);
-                                let is_watching = subscribed_or_not(owner, repo, &login).await?;
+                                let is_watching = watcher_or_not(owner, repo, &login).await?;
+                                // let is_watching = subscribed_or_not(owner, repo, &login).await?;
                                 upload_airtable(&login, &email, &twitter, is_watching).await;
                             }
                         }
@@ -381,6 +383,94 @@ async fn subscribed_or_not(owner: &str, _repo: &str, user_login: &str) -> anyhow
             user_login,
             _e
         ),
+    }
+
+    Ok(false)
+}
+
+async fn watcher_or_not(owner: &str, repo: &str, user_login: &str) -> anyhow::Result<bool> {
+    #[derive(serde::Serialize, serde::Deserialize, Debug)]
+    struct GraphQLResponse {
+        data: Option<RepositoryData>,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, Debug)]
+    struct RepositoryData {
+        repository: Option<Repository>,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, Debug)]
+    struct Repository {
+        watchers: Option<WatchersConnection>,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, Debug)]
+    struct WatchersConnection {
+        edges: Option<Vec<WatcherEdge>>,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, Debug)]
+    struct WatcherEdge {
+        node: Option<WatcherNode>,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, Debug)]
+    struct WatcherNode {
+        login: String,
+        url: String,
+        #[serde(rename = "createdAt")]
+        created_at: String,
+    }
+
+    let last: i32 = 100; // Number of watchers to retrieve
+
+    let query = format!(
+        r#"
+        query {{
+            repository(owner: "{}", name: "{}") {{
+                watchers(last: {}) {{
+                    edges {{
+                        node {{
+                            login
+                            url
+                            createdAt
+                        }}
+                    }}
+                }}
+            }}
+        }}
+        "#,
+        owner, repo, last
+    );
+
+    let octocrab = get_octo(&GithubLogin::Default);
+
+
+    match octocrab.graphql::<GraphQLResponse>(&query).await {
+        Ok(response) => {
+            if let Some(data) = response.data {
+                if let Some(repository) = data.repository {
+                    if let Some(watchers) = repository.watchers {
+                        if let Some(edges) = watchers.edges {
+                            for edge in edges {
+                                if let Some(node) = edge.node {
+                                   if user_login == node.login {
+                                    return Ok(true);
+                                   }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            log::error!(
+                "Failed to query GitHub GraphQL API for watchers of the repository: {:?}",
+                e
+            );
+            return Err(e.into()); // Convert the error into anyhow::Error if needed.
+        }
     }
 
     Ok(false)
