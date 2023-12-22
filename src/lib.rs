@@ -7,7 +7,7 @@ use github_flows::{get_octo, GithubLogin};
 use schedule_flows::{schedule_cron_job, schedule_handler};
 use serde::{Deserialize, Serialize};
 use serde_json;
-use std::env;
+use std::{collections::HashSet, env};
 
 #[no_mangle]
 #[tokio::main(flavor = "current_thread")]
@@ -36,11 +36,17 @@ async fn handler(body: Vec<u8>) {
     let now = Utc::now();
     let n_days_ago = (now - Duration::days(7)).date_naive();
 
-    if let Err(e) = track_forks(&owner, &repo, &n_days_ago).await {
-        log::error!("Failed to track forks: {:?}", e);
-    }
-    if let Err(e) = track_stargazers(&owner, &repo, &n_days_ago).await {
-        log::error!("Failed to track stargazers: {:?}", e);
+    match get_watchers(&owner, &repo).await {
+        Ok(watchers) => {
+            if let Err(e) = track_forks(&owner, &repo, &watchers, &n_days_ago).await {
+                log::error!("Failed to track forks: {:?}", e);
+            }
+            if let Err(e) = track_stargazers(&owner, &repo, &watchers, &n_days_ago).await {
+                log::error!("Failed to track stargazers: {:?}", e);
+            }
+        }
+
+        Err(e) => log::error!("Failed to get watchers: {:?}", e),
     }
 }
 
@@ -63,7 +69,12 @@ pub async fn upload_airtable(login: &str, email: &str, twitter_username: &str, w
     );
 }
 
-async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Result<()> {
+async fn track_forks(
+    owner: &str,
+    repo: &str,
+    watchers_set: &HashSet<String>,
+    date: &NaiveDate,
+) -> anyhow::Result<()> {
     #[derive(Serialize, Deserialize, Debug)]
     struct GraphQLResponse {
         data: Option<RepositoryData>,
@@ -146,8 +157,7 @@ async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Resul
                             if fork_date >= *date {
                                 let (email, twitter) = get_user_data(&login).await?;
                                 log::info!("{} {} {}", &login, email, twitter);
-                                let is_watching = watcher_or_not(owner, repo, &login).await?;
-                                // let is_watching = subscribed_or_not(owner, repo, &login).await?;
+                                let is_watching = watchers_set.contains(&login);
                                 upload_airtable(&login, &email, &twitter, is_watching).await;
                             }
                         }
@@ -161,7 +171,12 @@ async fn track_forks(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Resul
     Ok(())
 }
 
-async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::Result<()> {
+async fn track_stargazers(
+    owner: &str,
+    repo: &str,
+    watchers_set: &HashSet<String>,
+    date: &NaiveDate,
+) -> anyhow::Result<()> {
     #[derive(Serialize, Deserialize, Debug)]
     struct GraphQLResponse {
         data: Option<RepositoryData>,
@@ -234,8 +249,7 @@ async fn track_stargazers(owner: &str, repo: &str, date: &NaiveDate) -> anyhow::
                             if stargazer_date >= *date {
                                 let (email, twitter) = get_user_data(&login).await?;
                                 log::info!("{} {} {}", &login, email, twitter);
-                                let is_watching = watcher_or_not(owner, repo, &login).await?;
-                                // let is_watching = subscribed_or_not(owner, repo, &login).await?;
+                                let is_watching = watchers_set.contains(login);
                                 upload_airtable(&login, &email, &twitter, is_watching).await;
                             }
                         }
@@ -280,133 +294,7 @@ async fn get_user_data(login: &str) -> anyhow::Result<(String, String)> {
     }
 }
 
-async fn subscribed_or_not(owner: &str, _repo: &str, user_login: &str) -> anyhow::Result<bool> {
-    #[derive(Serialize, Deserialize, Debug)]
-    struct GraphQLResponse {
-        data: Option<UserData>,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct UserData {
-        user: Option<User>,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct User {
-        watching: Option<WatchingConnection>,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct WatchingConnection {
-        edges: Option<Vec<WatchingEdge>>,
-        #[serde(rename = "pageInfo")]
-        page_info: Option<PageInfo>,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct WatchingEdge {
-        node: Option<WatchingNode>,
-        cursor: Option<String>,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct WatchingNode {
-        name: Option<String>,
-        #[serde(rename = "createdAt")]
-        created_at: Option<String>,
-        owner: Option<UserOwner>,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct UserOwner {
-        login: Option<String>,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct PageInfo {
-        #[serde(rename = "endCursor")]
-        end_cursor: Option<String>,
-        #[serde(rename = "hasNextPage")]
-        has_next_page: Option<bool>,
-    }
-
-    let octocrab = get_octo(&GithubLogin::Default);
-    let mut end_cursor = None;
-
-    loop {
-        let query = format!(
-            r#"
-                query {{
-                    user(login: "{user_login}") {{
-                        watching(after: {end_cursor}, first: 100) {{
-                            edges {{
-                                node {{
-                                    name
-                                    createdAt
-                                    owner {{
-                                        login
-                                    }}
-                                }}
-                                cursor
-                            }}
-                            pageInfo {{
-                                endCursor
-                                hasNextPage
-                            }}
-                        }}
-                    }}
-                }}
-                "#,
-            user_login = user_login,
-            end_cursor = end_cursor
-                .as_ref()
-                .map_or("null".into(), |c| format!(r#""{}""#, c))
-        );
-
-        let response: GraphQLResponse = octocrab.graphql(&query).await?;
-        if let Some(data) = response.data {
-            if let Some(user) = data.user {
-                if let Some(watching) = user.watching {
-                    if let Some(edges) = watching.edges {
-                        for edge in edges {
-                            if let Some(node) = edge.node {
-                                if let Some(repo_name) = node.name {
-                                    if let Some(owner_data) = node.owner {
-                                        if let Some(owner_login) = owner_data.login {
-                                            if owner_login == owner && repo_name == _repo {
-                                                return Ok(true);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if let Some(page_info) = watching.page_info {
-                        if let Some(has_next_page) = page_info.has_next_page {
-                            if !has_next_page {
-                                break;
-                            }
-                        }
-                        end_cursor = page_info.end_cursor;
-                    } else {
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            } else {
-                break;
-            }
-        } else {
-            break;
-        }
-    }
-
-    Ok(false)
-}
-
-async fn watcher_or_not(owner: &str, repo: &str, user_login: &str) -> anyhow::Result<bool> {
+async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>> {
     #[derive(Serialize, Deserialize, Debug)]
     struct GraphQLResponse {
         data: Option<RepositoryData>,
@@ -448,6 +336,7 @@ async fn watcher_or_not(owner: &str, repo: &str, user_login: &str) -> anyhow::Re
         page_info: Option<PageInfo>,
     }
 
+    let mut watchers_set = HashSet::<String>::new();
     let octocrab = get_octo(&GithubLogin::Default);
     let mut before_cursor = None;
 
@@ -485,9 +374,10 @@ async fn watcher_or_not(owner: &str, repo: &str, user_login: &str) -> anyhow::Re
                     if let Some(edges) = watchers.edges {
                         for edge in edges {
                             if let Some(node) = edge.node {
-                                if user_login == node.login {
-                                    return Ok(true);
-                                }
+                                watchers_set.insert(node.login);
+                            }
+                            if watchers_set.len() >= 1000 {
+                                break;
                             }
                         }
                     }
@@ -510,6 +400,9 @@ async fn watcher_or_not(owner: &str, repo: &str, user_login: &str) -> anyhow::Re
             break;
         }
     }
-
-    Ok(false)
+    if watchers_set.len() > 0 {
+        Ok(watchers_set)
+    } else {
+        Err(anyhow::anyhow!("no watchers"))
+    }
 }
