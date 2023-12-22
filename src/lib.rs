@@ -1,6 +1,6 @@
 use airtable_flows::create_record;
 use anyhow;
-use chrono::{DateTime, Duration, NaiveDate, Utc, Datelike, Timelike};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, Timelike, Utc};
 use dotenv::dotenv;
 use flowsnet_platform_sdk::logger;
 use github_flows::{get_octo, GithubLogin};
@@ -330,55 +330,51 @@ async fn subscribed_or_not(owner: &str, _repo: &str, user_login: &str) -> anyhow
         has_next_page: Option<bool>,
     }
 
-    let last: i32 = 100; // You can adjust this to your preferred page size
+    let octocrab = get_octo(&GithubLogin::Default);
+    let mut end_cursor = None;
 
-    let query = format!(
-        r#"
-        query {{
-            user(login: "{}") {{
-                watching(last: {}) {{
-                    edges {{
-                        node {{
-                            name
-                            createdAt
-                            owner {{
-                                login
+    loop {
+        let query = format!(
+            r#"
+                query {{
+                    user(login: "{user_login}") {{
+                        watching(after: {end_cursor}, first: 100) {{
+                            edges {{
+                                node {{
+                                    name
+                                    createdAt
+                                    owner {{
+                                        login
+                                    }}
+                                }}
+                                cursor
+                            }}
+                            pageInfo {{
+                                endCursor
+                                hasNextPage
                             }}
                         }}
-                        cursor
-                    }}
-                    pageInfo {{
-                        endCursor
-                        hasNextPage
                     }}
                 }}
-            }}
-        }}
-        "#,
-        user_login,
-        last // Insert the variables directly into the string
-    );
+                "#,
+            user_login = user_login,
+            end_cursor = end_cursor
+                .as_ref()
+                .map_or("null".into(), |c| format!(r#""{}""#, c))
+        );
 
-    let octocrab = get_octo(&GithubLogin::Default);
-
-    match octocrab.graphql::<GraphQLResponse>(&query).await {
-        Ok(response) => {
-            if let Some(data) = response.data {
-                if let Some(u) = data.user {
-                    if let Some(watching) = u.watching {
-                        if let Some(edges) = watching.edges {
-                            for edge in edges {
-                                if let Some(node) = edge.node {
-                                    if let Some(repo) = node.name {
-                                        log::info!("Checking repo: {}", repo);
-
-                                        if let Some(o) = node.owner {
-                                            if let Some(owner_login) = o.login {
-                                                log::info!("Checking owner: {}", owner_login);
-
-                                                if owner_login == owner && repo == _repo {
-                                                    return Ok(true);
-                                                }
+        let response: GraphQLResponse = octocrab.graphql(&query).await?;
+        if let Some(data) = response.data {
+            if let Some(user) = data.user {
+                if let Some(watching) = user.watching {
+                    if let Some(edges) = watching.edges {
+                        for edge in edges {
+                            if let Some(node) = edge.node {
+                                if let Some(repo_name) = node.name {
+                                    if let Some(owner_data) = node.owner {
+                                        if let Some(owner_login) = owner_data.login {
+                                            if owner_login == owner && repo_name == _repo {
+                                                return Ok(true);
                                             }
                                         }
                                     }
@@ -386,100 +382,134 @@ async fn subscribed_or_not(owner: &str, _repo: &str, user_login: &str) -> anyhow
                             }
                         }
                     }
+                    if let Some(page_info) = watching.page_info {
+                        if let Some(has_next_page) = page_info.has_next_page {
+                            if !has_next_page {
+                                break;
+                            }
+                        }
+                        end_cursor = page_info.end_cursor;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
                 }
+            } else {
+                break;
             }
+        } else {
+            break;
         }
-        Err(_e) => log::error!(
-            "Failed to query GitHub GraphQL API on user {} for watching repo: {:?}",
-            user_login,
-            _e
-        ),
     }
 
     Ok(false)
 }
 
 async fn watcher_or_not(owner: &str, repo: &str, user_login: &str) -> anyhow::Result<bool> {
-    #[derive(serde::Serialize, serde::Deserialize, Debug)]
+    #[derive(Serialize, Deserialize, Debug)]
     struct GraphQLResponse {
         data: Option<RepositoryData>,
     }
 
-    #[derive(serde::Serialize, serde::Deserialize, Debug)]
+    #[derive(Serialize, Deserialize, Debug)]
     struct RepositoryData {
         repository: Option<Repository>,
     }
 
-    #[derive(serde::Serialize, serde::Deserialize, Debug)]
+    #[derive(Serialize, Deserialize, Debug)]
     struct Repository {
         watchers: Option<WatchersConnection>,
     }
 
-    #[derive(serde::Serialize, serde::Deserialize, Debug)]
-    struct WatchersConnection {
-        edges: Option<Vec<WatcherEdge>>,
-    }
-
-    #[derive(serde::Serialize, serde::Deserialize, Debug)]
+    #[derive(Serialize, Deserialize, Debug)]
     struct WatcherEdge {
         node: Option<WatcherNode>,
     }
-
-    #[derive(serde::Serialize, serde::Deserialize, Debug)]
+    #[derive(Serialize, Deserialize, Debug)]
     struct WatcherNode {
         login: String,
         url: String,
         #[serde(rename = "createdAt")]
         created_at: String,
     }
+    #[derive(Serialize, Deserialize, Debug)]
+    struct PageInfo {
+        #[serde(rename = "endCursor")]
+        end_cursor: Option<String>,
+        #[serde(rename = "hasNextPage")]
+        has_next_page: Option<bool>,
+    }
 
-    let last: i32 = 100; // Number of watchers to retrieve
+    #[derive(Serialize, Deserialize, Debug)]
+    struct WatchersConnection {
+        edges: Option<Vec<WatcherEdge>>,
+        #[serde(rename = "pageInfo")]
+        page_info: Option<PageInfo>,
+    }
 
-    let query = format!(
-        r#"
-        query {{
-            repository(owner: "{}", name: "{}") {{
-                watchers(last: {}) {{
-                    edges {{
-                        node {{
-                            login
-                            url
-                            createdAt
+    let octocrab = get_octo(&GithubLogin::Default);
+    let mut end_cursor = None;
+
+    loop {
+        let query = format!(
+            r#"
+            query {{
+                repository(owner: "{}", name: "{}") {{
+                    watchers(first: 100, after: {}) {{
+                        edges {{
+                            node {{
+                                login
+                                url
+                                createdAt
+                            }}
+                        }}
+                        pageInfo {{
+                            endCursor
+                            hasNextPage
                         }}
                     }}
                 }}
             }}
-        }}
-        "#,
-        owner, repo, last
-    );
+            "#,
+            owner,
+            repo,
+            end_cursor
+                .as_ref()
+                .map_or("null".into(), |c| format!(r#""{}""#, c))
+        );
 
-    let octocrab = get_octo(&GithubLogin::Default);
-
-    match octocrab.graphql::<GraphQLResponse>(&query).await {
-        Ok(response) => {
-            if let Some(data) = response.data {
-                if let Some(repository) = data.repository {
-                    if let Some(watchers) = repository.watchers {
-                        if let Some(edges) = watchers.edges {
-                            for edge in edges {
-                                if let Some(node) = edge.node {
-                                    if user_login == node.login {
-                                        return Ok(true);
-                                    }
+        let response: GraphQLResponse = octocrab.graphql(&query).await?;
+        if let Some(data) = response.data {
+            if let Some(repository) = data.repository {
+                if let Some(watchers) = repository.watchers {
+                    if let Some(edges) = watchers.edges {
+                        for edge in edges {
+                            if let Some(node) = edge.node {
+                                if user_login == node.login {
+                                    return Ok(true);
                                 }
                             }
                         }
                     }
+                    if let Some(page_info) = watchers.page_info {
+                        if let Some(has_next_page) = page_info.has_next_page {
+                            if !has_next_page {
+                                break;
+                            }
+                        }
+                        end_cursor = page_info.end_cursor;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
                 }
+            } else {
+                break;
             }
-        }
-        Err(e) => {
-            log::error!(
-                "Failed to query GitHub GraphQL API for watchers of the repository: {:?}",
-                e
-            );
-            return Err(e.into()); // Convert the error into anyhow::Error if needed.
+        } else {
+            break;
         }
     }
 
