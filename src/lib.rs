@@ -91,11 +91,6 @@ async fn track_forks(
     }
 
     #[derive(Serialize, Deserialize, Debug)]
-    struct ForkConnection {
-        edges: Option<Vec<Edge>>,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
     struct Edge {
         node: Option<ForkNode>,
     }
@@ -116,56 +111,99 @@ async fn track_forks(
 
     let first: i32 = 100;
 
-    let query = format!(
-        r#"
-        query {{
-            repository(owner: "{}", name: "{}") {{
-                forks(first: {}, orderBy: {{field: CREATED_AT, direction: DESC}}) {{
-                    edges {{
-                        node {{
-                            id
-                            name
-                            owner {{
-                                login
+    #[derive(Serialize, Deserialize, Debug)]
+    struct PageInfo {
+        end_cursor: Option<String>,
+        has_next_page: bool,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct ForkConnection {
+        edges: Option<Vec<Edge>>,
+        page_info: Option<PageInfo>, // Add this field to your ForkConnection struct
+    }
+
+    let first: i32 = 100;
+    let mut after_cursor: Option<String> = None;
+
+    let octocrab = get_octo(&GithubLogin::Default);
+
+    loop {
+        let after = if let Some(after_value) = &after_cursor {
+            format!(r#""{}""#, after_value)
+        } else {
+            "null".to_string()
+        };
+
+        let query = format!(
+            r#"
+            query {{
+                repository(owner: "{}", name: "{}") {{
+                    forks(first: {}, after: {}, orderBy: {{field: CREATED_AT, direction: DESC}}) {{
+                        edges {{
+                            node {{
+                                id
+                                name
+                                owner {{
+                                    login
+                                }}
+                                createdAt
                             }}
-                            createdAt
+                        }}
+                        pageInfo {{
+                            endCursor
+                            hasNextPage
                         }}
                     }}
                 }}
             }}
-        }}
-        "#,
-        owner, repo, first
-    );
+            "#,
+            owner, repo, first, after,
+        );
 
-    let octocrab = get_octo(&GithubLogin::Default);
+        let response: GraphQLResponse = octocrab.graphql(&query).await?;
+        if let Some(repository_data) = response.data {
+            if let Some(repository) = repository_data.repository {
+                if let Some(forks) = repository.forks {
+                    if let Some(edges) = forks.edges {
+                        for edge in edges {
+                            if let Some(node) = edge.node {
+                                if let (Some(login), Some(created_at_str)) =
+                                    (node.owner.and_then(|o| o.login), node.created_at)
+                                {
+                                    let fork_created_at =
+                                        DateTime::parse_from_rfc3339(&created_at_str)?;
+                                    let fork_date = fork_created_at.naive_utc().date();
 
-    match octocrab.graphql::<GraphQLResponse>(&query).await {
-        Ok(data) => {
-            if let Some(edges) = data
-                .data
-                .and_then(|d| d.repository.and_then(|r| r.forks.and_then(|f| f.edges)))
-            {
-                for edge in edges {
-                    if let Some(node) = edge.node {
-                        if let (Some(login), Some(created_at_str)) =
-                            (node.owner.and_then(|o| o.login), node.created_at)
-                        {
-                            let fork_created_at = DateTime::parse_from_rfc3339(&created_at_str)?;
-                            let fork_date = fork_created_at.naive_utc().date();
-
-                            if fork_date >= *date {
-                                let (email, twitter) = get_user_data(&login).await?;
-                                log::info!("{} {} {}", &login, email, twitter);
-                                let is_watching = watchers_set.contains(&login);
-                                upload_airtable(&login, &email, &twitter, is_watching).await;
+                                    if fork_date >= *date {
+                                        let (email, twitter) = get_user_data(&login).await?;
+                                        log::info!("{} {} {}", &login, email, twitter);
+                                        let is_watching = watchers_set.contains(&login);
+                                        upload_airtable(&login, &email, &twitter, is_watching)
+                                            .await;
+                                    }
+                                }
                             }
                         }
                     }
+
+                    if let Some(page_info) = forks.page_info {
+                        after_cursor = page_info.end_cursor;
+                        if !page_info.has_next_page {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
                 }
+            } else {
+                break;
             }
+        } else {
+            break;
         }
-        Err(_e) => log::error!("Failed to query GitHub GraphQL API on forkers: {:?}", _e),
     }
 
     Ok(())
@@ -193,11 +231,6 @@ async fn track_stargazers(
     }
 
     #[derive(Serialize, Deserialize, Debug)]
-    struct StargazerConnection {
-        edges: Option<Vec<StargazerEdge>>,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
     struct StargazerEdge {
         node: Option<StargazerNode>,
         #[serde(rename = "starredAt")]
@@ -210,58 +243,97 @@ async fn track_stargazers(
         login: Option<String>,
     }
 
-    let first: i32 = 100; // You can adjust this to your preferred page size
+    #[derive(Serialize, Deserialize, Debug)]
+    struct PageInfo {
+        end_cursor: Option<String>,
+        has_next_page: bool,
+    }
 
-    let query = format!(
-        r#"
-        query {{
-            repository(owner: "{}", name: "{}") {{
-                stargazers(first: {}, orderBy: {{field: STARRED_AT, direction: DESC}}) {{
-                    edges {{
-                        node {{
-                            id
-                            login
-                        }}
-                        starredAt
-                    }}
-                }}
-            }}
-        }}
-        "#,
-        owner, repo, first
-    );
+    #[derive(Serialize, Deserialize, Debug)]
+    struct StargazerConnection {
+        edges: Option<Vec<StargazerEdge>>,
+        page_info: Option<PageInfo>,
+    }
+
+    let first: i32 = 100;
+    let mut after_cursor: Option<String> = None;
 
     let octocrab = get_octo(&GithubLogin::Default);
 
-    match octocrab.graphql::<GraphQLResponse>(&query).await {
-        Ok(data) => {
-            if let Some(edges) = data.data.and_then(|d| {
-                d.repository
-                    .and_then(|r| r.stargazers.and_then(|f| f.edges))
-            }) {
-                for edge in edges {
-                    if let (Some(node), Some(ref starred_at_str)) = (edge.node, edge.starred_at) {
-                        if let Some(ref login) = node.login {
-                            let stargazer_starred_at =
-                                DateTime::parse_from_rfc3339(&starred_at_str)?;
-                            let stargazer_date = stargazer_starred_at.naive_utc().date();
+    loop {
+        let after = if let Some(after_value) = &after_cursor {
+            format!(r#""{}""#, after_value)
+        } else {
+            "null".to_string()
+        };
 
-                            if stargazer_date >= *date {
-                                let (email, twitter) = get_user_data(&login).await?;
-                                log::info!("{} {} {}", &login, email, twitter);
-                                let is_watching = watchers_set.contains(login);
-                                upload_airtable(&login, &email, &twitter, is_watching).await;
+        let query = format!(
+            r#"
+            query {{
+                repository(owner: "{}", name: "{}") {{
+                    stargazers(first: {}, after: {}, orderBy: {{field: STARRED_AT, direction: DESC}}) {{
+                        edges {{
+                            node {{
+                                id
+                                login
+                            }}
+                            starredAt
+                        }}
+                        pageInfo {{
+                            endCursor
+                            hasNextPage
+                        }}
+                    }}
+                }}
+            }}
+            "#,
+            owner, repo, first, after
+        );
+
+        let response: GraphQLResponse = octocrab.graphql(&query).await?;
+        if let Some(repository_data) = response.data {
+            if let Some(repository) = repository_data.repository {
+                if let Some(stargazers) = repository.stargazers {
+                    if let Some(edges) = stargazers.edges {
+                        for edge in edges {
+                            if let (Some(node), Some(starred_at_str)) = (edge.node, edge.starred_at) {
+                                if let Some(login) = node.login {
+                                    let stargazer_starred_at = DateTime::parse_from_rfc3339(&starred_at_str)?;
+                                    let stargazer_date = stargazer_starred_at.naive_utc().date();
+
+                                    if stargazer_date >= *date {
+                                        let (email, twitter) = get_user_data(&login).await?;
+                                        log::info!("{} {} {}", &login, email, twitter);
+                                        let is_watching = watchers_set.contains(&login);
+                                        upload_airtable(&login, &email, &twitter, is_watching).await;
+                                    }
+                                }
                             }
                         }
                     }
+
+                    if let Some(page_info) = stargazers.page_info {
+                        after_cursor = page_info.end_cursor;
+                        if !page_info.has_next_page {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
                 }
+            } else {
+                break;
             }
+        } else {
+            break;
         }
-        Err(_e) => log::error!("Failed to query GitHub GraphQL API on stargazers: {:?}", _e),
     }
 
     Ok(())
 }
+
 
 async fn get_user_data(login: &str) -> anyhow::Result<(String, String)> {
     #[derive(Serialize, Deserialize, Debug)]
