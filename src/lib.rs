@@ -449,14 +449,14 @@ async fn watcher_or_not(owner: &str, repo: &str, user_login: &str) -> anyhow::Re
     }
 
     let octocrab = get_octo(&GithubLogin::Default);
-    let mut end_cursor = None;
+    let mut before_cursor = None;
 
     loop {
         let query = format!(
             r#"
             query {{
                 repository(owner: "{}", name: "{}") {{
-                    watchers(first: 100, after: {}) {{
+                    watchers(last: 100, before: {}) {{
                         edges {{
                             node {{
                                 login
@@ -474,11 +474,10 @@ async fn watcher_or_not(owner: &str, repo: &str, user_login: &str) -> anyhow::Re
             "#,
             owner,
             repo,
-            end_cursor
+            before_cursor
                 .as_ref()
-                .map_or("null".into(), |c| format!(r#""{}""#, c))
+                .map_or("null".to_string(), |c| format!(r#""{}""#, c))
         );
-
         let response: GraphQLResponse = octocrab.graphql(&query).await?;
         if let Some(data) = response.data {
             if let Some(repository) = data.repository {
@@ -493,12 +492,11 @@ async fn watcher_or_not(owner: &str, repo: &str, user_login: &str) -> anyhow::Re
                         }
                     }
                     if let Some(page_info) = watchers.page_info {
-                        if let Some(has_next_page) = page_info.has_next_page {
-                            if !has_next_page {
-                                break;
-                            }
+                        if page_info.has_next_page.unwrap_or(false) {
+                            before_cursor = page_info.end_cursor;
+                        } else {
+                            break;
                         }
-                        end_cursor = page_info.end_cursor;
                     } else {
                         break;
                     }

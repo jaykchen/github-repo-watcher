@@ -1,0 +1,18 @@
+{query {
+    repository(owner: "wasmedge", name: "wasmedge") {
+        watchers(first: 100, after: ) {
+            edges {
+                node {
+                    login
+                    url
+                    createdAt
+                    }
+                }
+            pageInfo {
+                endCursor
+                hasNextPage
+                }
+            }
+        }
+    }
+}
