@@ -34,7 +34,7 @@ async fn handler(body: Vec<u8>) {
     let repo = env::var("repo").unwrap_or("wasmedge".to_string());
 
     let now = Utc::now();
-    let n_days_ago = (now - Duration::days(1)).date_naive();
+    let n_days_ago = (now - Duration::days(7)).date_naive();
 
     if let Err(e) = track_forks(&owner, &repo, &n_days_ago).await {
         log::error!("Failed to track forks: {:?}", e);

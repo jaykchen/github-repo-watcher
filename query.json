@@ -1,18 +1,37 @@
-{query {
-    repository(owner: "wasmedge", name: "wasmedge") {
-        watchers(first: 100, after: ) {
-            edges {
-                node {
-                    login
-                    url
-                    createdAt
-                    }
-                }
-            pageInfo {
-                endCursor
-                hasNextPage
-                }
+forks(first: {}, orderBy: {field: CREATED_AT, direction: DESC
+}) {
+    edges {
+        node {
+            id
+            name
+            owner {
+                login
             }
+            createdAt
         }
     }
 }
+
+query($owner: String!, $repo: String!, $first: Int!) {
+    repository(owner: $owner, name: $repo) {
+        stargazers(first: &first, orderBy: {field: STARRED_AT, direction: DESC
+        }) {
+            edges {
+                node {
+                    id
+                    login
+                }
+                starredAt
+            }
+        }
+    }
+
+    stargazers(first: {}, orderBy: {field: STARRED_AT, direction: DESC
+}) {
+        edges {
+            node {
+                id
+                login
+            }
+            starredAt
+        }
