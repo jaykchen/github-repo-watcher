@@ -129,12 +129,6 @@ async fn track_forks(
     let octocrab = get_octo(&GithubLogin::Default);
 
     loop {
-        let after = if let Some(after_value) = &after_cursor {
-            format!(r#""{}""#, after_value)
-        } else {
-            "null".to_string()
-        };
-
         let query = format!(
             r#"
             query {{
@@ -158,7 +152,12 @@ async fn track_forks(
                 }}
             }}
             "#,
-            owner, repo, first, after,
+            owner,
+            repo,
+            first,
+            after_cursor
+                .as_ref()
+                .map_or("null".to_string(), |cursor| format!(r#""{}""#, cursor))
         );
 
         let response: GraphQLResponse = octocrab.graphql(&query).await?;
@@ -261,12 +260,6 @@ async fn track_stargazers(
     let octocrab = get_octo(&GithubLogin::Default);
 
     loop {
-        let after = if let Some(after_value) = &after_cursor {
-            format!(r#""{}""#, after_value)
-        } else {
-            "null".to_string()
-        };
-
         let query = format!(
             r#"
             query {{
@@ -287,7 +280,12 @@ async fn track_stargazers(
                 }}
             }}
             "#,
-            owner, repo, first, after
+            owner,
+            repo,
+            first,
+            after_cursor
+                .as_ref()
+                .map_or("null".to_string(), |cursor| format!(r#""{}""#, cursor))
         );
 
         let response: GraphQLResponse = octocrab.graphql(&query).await?;
@@ -296,16 +294,19 @@ async fn track_stargazers(
                 if let Some(stargazers) = repository.stargazers {
                     if let Some(edges) = stargazers.edges {
                         for edge in edges {
-                            if let (Some(node), Some(starred_at_str)) = (edge.node, edge.starred_at) {
+                            if let (Some(node), Some(starred_at_str)) = (edge.node, edge.starred_at)
+                            {
                                 if let Some(login) = node.login {
-                                    let stargazer_starred_at = DateTime::parse_from_rfc3339(&starred_at_str)?;
+                                    let stargazer_starred_at =
+                                        DateTime::parse_from_rfc3339(&starred_at_str)?;
                                     let stargazer_date = stargazer_starred_at.naive_utc().date();
 
                                     if stargazer_date >= *date {
                                         let (email, twitter) = get_user_data(&login).await?;
                                         log::info!("{} {} {}", &login, email, twitter);
                                         let is_watching = watchers_set.contains(&login);
-                                        upload_airtable(&login, &email, &twitter, is_watching).await;
+                                        upload_airtable(&login, &email, &twitter, is_watching)
+                                            .await;
                                     }
                                 }
                             }
@@ -333,7 +334,6 @@ async fn track_stargazers(
 
     Ok(())
 }
-
 
 async fn get_user_data(login: &str) -> anyhow::Result<(String, String)> {
     #[derive(Serialize, Deserialize, Debug)]
