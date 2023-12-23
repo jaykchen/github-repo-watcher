@@ -133,7 +133,7 @@ async fn track_forks(
             r#"
             query {{
                 repository(owner: "{}", name: "{}") {{
-                    forks(first: {}, after: {}, orderBy: {{field: CREATED_AT, direction: DESC}}) {{
+                    forks(first: {}, after: {}) {{
                         edges {{
                             node {{
                                 id
@@ -264,7 +264,7 @@ async fn track_stargazers(
             r#"
             query {{
                 repository(owner: "{}", name: "{}") {{
-                    stargazers(first: {}, after: {}, orderBy: {{field: STARRED_AT, direction: DESC}}) {{
+                    stargazers(first: {}, after: {}) {{
                         edges {{
                             node {{
                                 id
