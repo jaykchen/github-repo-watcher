@@ -114,7 +114,7 @@ async fn track_forks(
     #[derive(Serialize, Deserialize, Debug)]
     struct PageInfo {
         end_cursor: Option<String>,
-        has_next_page: bool,
+        has_next_page: Option<bool>,
     }
 
     #[derive(Serialize, Deserialize, Debug)]
@@ -191,11 +191,15 @@ async fn track_forks(
                     }
 
                     if let Some(page_info) = forks.page_info {
-                        after_cursor = page_info.end_cursor;
-                        if !page_info.has_next_page {
+                        if let Some(has_next_page) = page_info.has_next_page {
+                            if has_next_page {
+                                after_cursor = page_info.end_cursor; // Update the cursor for the next page
+                            } else {
+                                break;
+                            }
+                        } else {
                             break;
-                        }
-                    } else {
+                        }                    } else {
                         break;
                     }
                 } else {
@@ -249,7 +253,7 @@ async fn track_stargazers(
     #[derive(Serialize, Deserialize, Debug)]
     struct PageInfo {
         end_cursor: Option<String>,
-        has_next_page: bool,
+        has_next_page: Option<bool>,
     }
 
     #[derive(Serialize, Deserialize, Debug)]
@@ -321,11 +325,15 @@ async fn track_stargazers(
                     }
 
                     if let Some(page_info) = stargazers.page_info {
-                        after_cursor = page_info.end_cursor;
-                        if !page_info.has_next_page {
+                        if let Some(has_next_page) = page_info.has_next_page {
+                            if has_next_page {
+                                after_cursor = page_info.end_cursor; // Update the cursor for the next page
+                            } else {
+                                break;
+                            }
+                        } else {
                             break;
-                        }
-                    } else {
+                        }                    } else {
                         break;
                     }
                 } else {
@@ -418,11 +426,7 @@ async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>
     let mut watchers_set = HashSet::<String>::new();
     let octocrab = get_octo(&GithubLogin::Default);
     let mut after_cursor = None;
-    let mut count = 0;
     loop {
-        count += 1;
-        log::info!("watcher loop {}", count);
-
         let query = format!(
             r#"
             query {{
@@ -450,7 +454,6 @@ async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>
                 .map_or("null".to_string(), |c| format!(r#""{}""#, c))
         );
 
-        log::info!("query {}", query);
         let response: GraphQLResponse = octocrab.graphql(&query).await?;
         if let Some(data) = response.data {
             if let Some(repository) = data.repository {
@@ -459,9 +462,6 @@ async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>
                         for edge in edges {
                             if let Some(node) = edge.node {
                                 watchers_set.insert(node.login);
-                            }
-                            if watchers_set.len() >= 1000 {
-                                break;
                             }
                         }
                     }
