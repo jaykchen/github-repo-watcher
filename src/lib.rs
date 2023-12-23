@@ -270,6 +270,7 @@ async fn track_stargazers(
     let mut after_cursor: Option<String> = None;
 
     let octocrab = get_octo(&GithubLogin::Default);
+
     let mut count = 0;
     let mut count_out_of_range = 0;
     'outer: loop {
@@ -305,10 +306,13 @@ async fn track_stargazers(
         });
         log::info!("{}", query_payload.clone());
 
-        // let response_text: String = octocrab.graphql(&query_payload).await?;
+        let response_text: String = octocrab.graphql(&query_payload).await?;
 
-        let response: GraphQLResponse = octocrab.graphql(&query_payload).await?;
-        if let Some(repository_data) = response.data {
+        let response: GraphQLResponse = serde_json::from_str(&response_text)?;
+
+        log::info!("{:?}", response);
+        // let response: GraphQLResponse = octocrab.graphql(&query_payload).await?;
+/*         if let Some(repository_data) = response.data {
             if let Some(repository) = repository_data.repository {
                 if let Some(stargazers) = repository.stargazers {
                     if let Some(edges) = stargazers.edges {
@@ -380,7 +384,7 @@ async fn track_stargazers(
             }
         } else {
             break;
-        }
+        } */
     }
 
     Ok(())
