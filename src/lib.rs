@@ -162,6 +162,7 @@ let mut count = 0;
                 .as_ref()
                 .map_or("null".to_string(), |cursor| format!(r#""{}""#, cursor))
         );
+        log::info!("query {}", query);
 
         let response: GraphQLResponse = octocrab.graphql(&query).await?;
         if let Some(repository_data) = response.data {
@@ -179,7 +180,7 @@ let mut count = 0;
 
                                     if fork_date >= *date {
                                         let (email, twitter) = get_user_data(&login).await?;
-                                        log::info!("{} {} {}", &login, email, twitter);
+                                        // log::info!("{} {} {}", &login, email, twitter);
                                         let is_watching = watchers_set.contains(&login);
                                         upload_airtable(&login, &email, &twitter, is_watching)
                                             .await;
@@ -292,6 +293,7 @@ let mut count = 0;
                 .as_ref()
                 .map_or("null".to_string(), |cursor| format!(r#""{}""#, cursor))
         );
+        log::info!("query {}", query);
 
         let response: GraphQLResponse = octocrab.graphql(&query).await?;
         if let Some(repository_data) = response.data {
@@ -308,7 +310,7 @@ let mut count = 0;
 
                                     if stargazer_date >= *date {
                                         let (email, twitter) = get_user_data(&login).await?;
-                                        log::info!("{} {} {}", &login, email, twitter);
+                                        // log::info!("{} {} {}", &login, email, twitter);
                                         let is_watching = watchers_set.contains(&login);
                                         upload_airtable(&login, &email, &twitter, is_watching)
                                             .await;
@@ -447,6 +449,7 @@ let mut count = 0;
                 .as_ref()
                 .map_or("null".to_string(), |c| format!(r#""{}""#, c))
         );
+        log::info!("query {}", query);
         let response: GraphQLResponse = octocrab.graphql(&query).await?;
         if let Some(data) = response.data {
             if let Some(repository) = data.repository {
