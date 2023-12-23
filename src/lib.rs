@@ -38,12 +38,12 @@ async fn handler(body: Vec<u8>) {
 
     match get_watchers(&owner, &repo).await {
         Ok(watchers) => {
-            // if let Err(e) = track_forks(&owner, &repo, &watchers, &n_days_ago).await {
-            //     log::error!("Failed to track forks: {:?}", e);
-            // }
-            if let Err(e) = track_stargazers(&owner, &repo, &watchers, &n_days_ago).await {
-                log::error!("Failed to track stargazers: {:?}", e);
+            if let Err(e) = track_forks(&owner, &repo, &watchers, &n_days_ago).await {
+                log::error!("Failed to track forks: {:?}", e);
             }
+            // if let Err(e) = track_stargazers(&owner, &repo, &watchers, &n_days_ago).await {
+            //     log::error!("Failed to track stargazers: {:?}", e);
+            // }
         }
 
         Err(e) => log::error!("Failed to get watchers: {:?}", e),
