@@ -127,7 +127,7 @@ async fn track_forks(
     let mut after_cursor: Option<String> = None;
 
     let octocrab = get_octo(&GithubLogin::Default);
-let mut count = 0;
+    let mut count = 0;
     loop {
         count += 1;
         log::info!("fork loop {}", count);
@@ -262,7 +262,7 @@ async fn track_stargazers(
     let mut after_cursor: Option<String> = None;
 
     let octocrab = get_octo(&GithubLogin::Default);
-let mut count = 0;
+    let mut count = 0;
     loop {
         count += 1;
         log::info!("stars loop {}", count);
@@ -406,10 +406,8 @@ async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>
         end_cursor: Option<String>,
         #[serde(rename = "hasNextPage")]
         has_next_page: Option<bool>,
-        #[serde(rename = "hasPreviousPage")]
-        has_previous_page: Option<bool>, // Add this field
     }
-    
+
     #[derive(Serialize, Deserialize, Debug)]
     struct WatchersConnection {
         edges: Option<Vec<WatcherEdge>>,
@@ -419,8 +417,8 @@ async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>
 
     let mut watchers_set = HashSet::<String>::new();
     let octocrab = get_octo(&GithubLogin::Default);
-    let mut before_cursor = None;
-let mut count = 0;
+    let mut after_cursor = None;
+    let mut count = 0;
     loop {
         count += 1;
         log::info!("watcher loop {}", count);
@@ -429,7 +427,7 @@ let mut count = 0;
             r#"
             query {{
                 repository(owner: "{}", name: "{}") {{
-                    watchers(last: 100, before: {}) {{
+                    watchers(first: 100, after: {}) {{
                         edges {{
                             node {{
                                 login
@@ -447,10 +445,11 @@ let mut count = 0;
             "#,
             owner,
             repo,
-            before_cursor
+            after_cursor
                 .as_ref()
                 .map_or("null".to_string(), |c| format!(r#""{}""#, c))
         );
+
         log::info!("query {}", query);
         let response: GraphQLResponse = octocrab.graphql(&query).await?;
         if let Some(data) = response.data {
@@ -467,9 +466,9 @@ let mut count = 0;
                         }
                     }
                     if let Some(page_info) = watchers.page_info {
-                        if let Some(has_previous_page) = page_info.has_previous_page {
-                            if has_previous_page {
-                                before_cursor = page_info.end_cursor;
+                        if let Some(has_next_page) = page_info.has_next_page {
+                            if has_next_page {
+                                after_cursor = page_info.end_cursor; // Update the cursor for the next page
                             } else {
                                 break;
                             }
