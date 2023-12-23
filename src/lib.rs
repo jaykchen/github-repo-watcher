@@ -123,7 +123,6 @@ async fn track_forks(
         page_info: Option<PageInfo>, // Add this field to your ForkConnection struct
     }
 
-    let first: i32 = 100;
     let mut after_cursor: Option<String> = None;
 
     let octocrab = get_octo(&GithubLogin::Default);
@@ -137,7 +136,7 @@ async fn track_forks(
             r#"
             query {{
                 repository(owner: "{}", name: "{}") {{
-                    forks(first: {}, after: {}, orderBy: {{field: CREATED_AT, direction: DESC}}) {{
+                    forks(first: 100, after: {}, orderBy: {{field: CREATED_AT, direction: DESC}}) {{
                         edges {{
                             node {{
                                 id
@@ -158,7 +157,6 @@ async fn track_forks(
             "#,
             owner,
             repo,
-            first,
             after_cursor
                 .as_ref()
                 .map_or("null".to_string(), |cursor| format!(r#""{}""#, cursor))
@@ -340,13 +338,7 @@ async fn track_stargazers(
                     if let Some(page_info) = stargazers.page_info {
                         if let Some(has_next_page) = page_info.has_next_page {
                             if has_next_page {
-                                after_cursor = match &page_info.end_cursor {
-                                    Some(cursor) => Some(cursor.clone()),
-                                    None => {
-                                        log::error!("End cursor missing despite hasNextPage being true");
-                                        break;
-                                    }
-                                };
+                                after_cursor = page_info.end_cursor; // Update the cursor for the next page
                             } else {
                                 break;
                             }
@@ -449,7 +441,10 @@ async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>
     let mut watchers_set = HashSet::<String>::new();
     let octocrab = get_octo(&GithubLogin::Default);
     let mut after_cursor = None;
+    let mut count = 0;
     loop {
+        count += 1;
+        log::info!("watchers loop {}", count);
         let query = format!(
             r#"
             query {{
