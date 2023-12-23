@@ -38,9 +38,8 @@ async fn handler(body: Vec<u8>) {
 
     match get_watchers(&owner, &repo).await {
         Ok(watchers) => {
-            if let Err(e) = track_forks(&owner, &repo, &watchers, &n_days_ago).await {
-                log::error!("Failed to track forks: {:?}", e);
-            }
+          let _ = track_forks(&owner, &repo, &watchers, &n_days_ago).await;
+          
             // if let Err(e) = track_stargazers(&owner, &repo, &watchers, &n_days_ago).await {
             //     log::error!("Failed to track stargazers: {:?}", e);
             // }
@@ -86,7 +85,7 @@ async fn track_forks(
         let response = match octocrab
             .repos(owner, repo)
             .list_forks()
-            .sort(github_flows::octocrab::params::repos::forks::Sort::Newest)
+            // .sort(github_flows::octocrab::params::repos::forks::Sort::Newest)
             .page(n)
             .per_page(100)
             .send()
