@@ -406,8 +406,10 @@ async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>
         end_cursor: Option<String>,
         #[serde(rename = "hasNextPage")]
         has_next_page: Option<bool>,
+        #[serde(rename = "hasPreviousPage")]
+        has_previous_page: Option<bool>, // Add this field
     }
-
+    
     #[derive(Serialize, Deserialize, Debug)]
     struct WatchersConnection {
         edges: Option<Vec<WatcherEdge>>,
@@ -465,8 +467,12 @@ let mut count = 0;
                         }
                     }
                     if let Some(page_info) = watchers.page_info {
-                        if page_info.has_next_page.unwrap_or(false) {
-                            before_cursor = page_info.end_cursor;
+                        if let Some(has_previous_page) = page_info.has_previous_page {
+                            if has_previous_page {
+                                before_cursor = page_info.end_cursor;
+                            } else {
+                                break;
+                            }
                         } else {
                             break;
                         }
