@@ -38,9 +38,9 @@ async fn handler(body: Vec<u8>) {
 
     match get_watchers(&owner, &repo).await {
         Ok(watchers) => {
-            if let Err(e) = track_forks(&owner, &repo, &watchers, &n_days_ago).await {
-                log::error!("Failed to track forks: {:?}", e);
-            }
+            // if let Err(e) = track_forks(&owner, &repo, &watchers, &n_days_ago).await {
+            //     log::error!("Failed to track forks: {:?}", e);
+            // }
             if let Err(e) = track_stargazers(&owner, &repo, &watchers, &n_days_ago).await {
                 log::error!("Failed to track stargazers: {:?}", e);
             }
@@ -184,10 +184,10 @@ async fn track_forks(
                                         upload_airtable(&login, &email, &twitter, is_watching)
                                             .await;
                                     } else {
-                                        count_out_of_range += 1;
-                                        if count_out_of_range > 10 {
-                                            break 'outer;
-                                        }
+                                        // count_out_of_range += 1;
+                                        // if count_out_of_range > 10 {
+                                        //     break 'outer;
+                                        // }
                                     }
                                 }
                             }
@@ -267,7 +267,6 @@ async fn track_stargazers(
         page_info: Option<PageInfo>,
     }
 
-    let first: i32 = 100;
     let mut after_cursor: Option<String> = None;
 
     let octocrab = get_octo(&GithubLogin::Default);
@@ -276,11 +275,10 @@ async fn track_stargazers(
     'outer: loop {
         count += 1;
         log::info!("stars loop {}", count);
-        let query = format!(
-            r#"
-            query {{
-                repository(owner: "{}", name: "{}") {{
-                    stargazers(first: {}, after: {}, orderBy: {{field: STARRED_AT, direction: DESC}}) {{
+        let query_str = format!(
+            r#"query {{
+                repository(owner: "{owner}", name: "{repo}") {{
+                    stargazers(first: 2, after: {after_cursor}, orderBy: {{field: STARRED_AT, direction: DESC}}) {{
                         edges {{
                             node {{
                                 id
@@ -294,40 +292,64 @@ async fn track_stargazers(
                         }}
                     }}
                 }}
-            }}
-            "#,
-            owner,
-            repo,
-            first,
-            after_cursor
+            }}"#,
+            owner = owner,
+            repo = repo,
+            after_cursor = after_cursor
                 .as_ref()
                 .map_or("null".to_string(), |cursor| format!(r#""{}""#, cursor))
         );
-        log::info!("query {}", query);
 
-        let response: GraphQLResponse = octocrab.graphql(&query).await?;
+        let query_payload = serde_json::json!({
+            "query": query_str,
+        });
+        log::info!("{}", query_payload.clone());
+
+        // let response_text: String = octocrab.graphql(&query_payload).await?;
+
+        let response: GraphQLResponse = octocrab.graphql(&query_payload).await?;
         if let Some(repository_data) = response.data {
             if let Some(repository) = repository_data.repository {
                 if let Some(stargazers) = repository.stargazers {
                     if let Some(edges) = stargazers.edges {
                         for edge in edges {
-                            if let (Some(node), Some(starred_at_str)) = (edge.node, edge.starred_at)
-                            {
+                            if let Some(node) = edge.node {
                                 if let Some(login) = node.login {
-                                    let stargazer_starred_at =
-                                        DateTime::parse_from_rfc3339(&starred_at_str)?;
-                                    let stargazer_date = stargazer_starred_at.naive_utc().date();
+                                    if let Some(starred_at_str) = edge.starred_at {
+                                        match DateTime::parse_from_rfc3339(&starred_at_str) {
+                                            Ok(stargazer_starred_at) => {
+                                                let stargazer_date =
+                                                    stargazer_starred_at.naive_utc().date();
 
-                                    if stargazer_date >= *date {
-                                        let (email, twitter) = get_user_data(&login).await?;
-                                        // log::info!("{} {} {}", &login, email, twitter);
-                                        let is_watching = watchers_set.contains(&login);
-                                        upload_airtable(&login, &email, &twitter, is_watching)
-                                            .await;
-                                    } else {
-                                        count_out_of_range += 1;
-                                        if count_out_of_range > 10 {
-                                            break 'outer;
+                                                if stargazer_date >= *date {
+                                                    if let Ok((email, twitter)) =
+                                                        get_user_data(&login).await
+                                                    {
+                                                        let is_watching =
+                                                            watchers_set.contains(&login);
+                                                        let _ = upload_airtable(
+                                                            &login,
+                                                            &email,
+                                                            &twitter,
+                                                            is_watching,
+                                                        )
+                                                        .await;
+                                                    } else {
+                                                        log::error!(
+                                                            "Failed to get user data for login: {}",
+                                                            login
+                                                        );
+                                                    }
+                                                } else {
+                                                    // count_out_of_range += 1;
+                                                    // if count_out_of_range > 10 {
+                                                    //     break 'outer;
+                                                    // }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                log::error!("Failed to parse star date: {}", e)
+                                            }
                                         }
                                     }
                                 }
@@ -350,7 +372,6 @@ async fn track_stargazers(
                         log::error!("pageInfo is missing from the response");
                         break;
                     }
-                    
                 } else {
                     break;
                 }
