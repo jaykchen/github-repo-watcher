@@ -340,16 +340,25 @@ async fn track_stargazers(
                     if let Some(page_info) = stargazers.page_info {
                         if let Some(has_next_page) = page_info.has_next_page {
                             if has_next_page {
-                                after_cursor = page_info.end_cursor; // Update the cursor for the next page
+                                after_cursor = match &page_info.end_cursor {
+                                    Some(cursor) => Some(cursor.clone()),
+                                    None => {
+                                        log::error!("End cursor missing despite hasNextPage being true");
+                                        break;
+                                    }
+                                };
                             } else {
                                 break;
                             }
                         } else {
+                            log::error!("hasNextPage is missing from pageInfo");
                             break;
                         }
                     } else {
+                        log::error!("pageInfo is missing from the response");
                         break;
                     }
+                    
                 } else {
                     break;
                 }
