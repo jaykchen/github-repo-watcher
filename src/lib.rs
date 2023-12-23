@@ -83,14 +83,26 @@ async fn track_forks(
     'outer: for n in 1u32..100 {
         log::info!("fork loop {}", n);
 
-        let response = octocrab
+        let response = match octocrab
             .repos(owner, repo)
             .list_forks()
-            .sort(Sort::Newest)
+            .sort(github_flows::octocrab::params::repos::forks::Sort::Newest)
             .page(n)
             .per_page(100)
             .send()
-            .await?;
+            .await
+        {
+            Ok(response) => response,
+            Err(e) => {
+                log::error!("Failed to list forks on page {}: {:?}", n, e);
+                break;
+            }
+        };
+
+        if response.items.is_empty() {
+            log::info!("No more forks to process, stopping at page {}", n);
+            break;
+        }
 
         for fork in response.items {
             match (fork.owner.and_then(|o| Some(o.login)), fork.created_at) {
@@ -123,7 +135,9 @@ async fn track_forks(
                 (_, _) => {}
             }
         }
-        {}
+        if n >= 3 {
+            break;
+        }
     }
 
     Ok(())
@@ -377,7 +391,7 @@ async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>
     let mut count = 0;
     loop {
         count += 1;
-        log::info!("watchers loop {}", count);
+        // log::info!("watchers loop {}", count);
         let query = format!(
             r#"
             query {{
