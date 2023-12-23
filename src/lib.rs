@@ -1,9 +1,9 @@
 use airtable_flows::create_record;
 use anyhow;
-use chrono::{DateTime, Datelike, Duration, NaiveDate, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Timelike, Utc};
 use dotenv::dotenv;
 use flowsnet_platform_sdk::logger;
-use github_flows::{get_octo, GithubLogin};
+use github_flows::{get_octo, octocrab::models::DateTimeOrU64, GithubLogin};
 use schedule_flows::{schedule_cron_job, schedule_handler};
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -75,147 +75,55 @@ async fn track_forks(
     watchers_set: &HashSet<String>,
     date: &NaiveDate,
 ) -> anyhow::Result<()> {
-    #[derive(Serialize, Deserialize, Debug)]
-    struct GraphQLResponse {
-        data: Option<RepositoryData>,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct RepositoryData {
-        repository: Option<Repository>,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct Repository {
-        forks: Option<ForkConnection>,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct Edge {
-        node: Option<ForkNode>,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct ForkNode {
-        id: Option<String>,
-        name: Option<String>,
-        owner: Option<Owner>,
-        #[serde(rename = "createdAt")]
-        created_at: Option<String>,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct Owner {
-        login: Option<String>,
-    }
-
-    let first: i32 = 100;
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct PageInfo {
-        end_cursor: Option<String>,
-        has_next_page: Option<bool>,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct ForkConnection {
-        edges: Option<Vec<Edge>>,
-        page_info: Option<PageInfo>, // Add this field to your ForkConnection struct
-    }
-
-    let mut after_cursor: Option<String> = None;
-
     let octocrab = get_octo(&GithubLogin::Default);
-    let mut count = 0;
+    use github_flows::octocrab::params::repos::forks::Sort;
+
     let mut count_out_of_range = 0;
-    'outer: loop {
-        count += 1;
-        log::info!("fork loop {}", count);
 
-        let query = format!(
-            r#"
-            query {{
-                repository(owner: "{}", name: "{}") {{
-                    forks(first: 100, after: {}, orderBy: {{field: CREATED_AT, direction: DESC}}) {{
-                        edges {{
-                            node {{
-                                id
-                                name
-                                owner {{
-                                    login
-                                }}
-                                createdAt
-                            }}
-                        }}
-                        pageInfo {{
-                            endCursor
-                            hasNextPage
-                        }}
-                    }}
-                }}
-            }}
-            "#,
-            owner,
-            repo,
-            after_cursor
-                .as_ref()
-                .map_or("null".to_string(), |cursor| format!(r#""{}""#, cursor))
-        );
-        log::info!("query {}", query);
+    'outer: for n in 1u32..100 {
+        log::info!("fork loop {}", n);
 
-        let response: GraphQLResponse = octocrab.graphql(&query).await?;
-        if let Some(repository_data) = response.data {
-            if let Some(repository) = repository_data.repository {
-                if let Some(forks) = repository.forks {
-                    if let Some(edges) = forks.edges {
-                        for edge in edges {
-                            if let Some(node) = edge.node {
-                                if let (Some(login), Some(created_at_str)) =
-                                    (node.owner.and_then(|o| o.login), node.created_at)
-                                {
-                                    let fork_created_at =
-                                        DateTime::parse_from_rfc3339(&created_at_str)?;
-                                    let fork_date = fork_created_at.naive_utc().date();
+        let response = octocrab
+            .repos(owner, repo)
+            .list_forks()
+            .sort(Sort::Newest)
+            .page(n)
+            .per_page(100)
+            .send()
+            .await?;
 
-                                    if fork_date >= *date {
-                                        let (email, twitter) = get_user_data(&login).await?;
-                                        // log::info!("{} {} {}", &login, email, twitter);
-                                        let is_watching = watchers_set.contains(&login);
-                                        upload_airtable(&login, &email, &twitter, is_watching)
-                                            .await;
-                                    } else {
-                                        // count_out_of_range += 1;
-                                        // if count_out_of_range > 10 {
-                                        //     break 'outer;
-                                        // }
-                                    }
-                                }
-                            }
+        for fork in response.items {
+            match (fork.owner.and_then(|o| Some(o.login)), fork.created_at) {
+                (Some(login), Some(ref created_at)) => {
+                    let fork_date = match &created_at {
+                        DateTimeOrU64::DateTime(fork_created_at) => {
+                            fork_created_at.naive_utc().date()
                         }
-                    }
-
-                    if let Some(page_info) = forks.page_info {
-                        if let Some(has_next_page) = page_info.has_next_page {
-                            if has_next_page {
-                                after_cursor = page_info.end_cursor; // Update the cursor for the next page
-                            } else {
-                                break;
-                            }
-                        } else {
-                            break;
+                        DateTimeOrU64::U64(unix_timestamp) => {
+                            Utc.timestamp(*unix_timestamp as i64, 0).naive_utc().date()
                         }
+                        _ => {
+                            log::error!("No fork_date was determined");
+                            continue;
+                        }
+                    };
+
+                    if fork_date >= *date {
+                        let (email, twitter) = get_user_data(&login).await?;
+                        // log::info!("{} {} {}", &login, email, twitter);
+                        let is_watching = watchers_set.contains(&login);
+                        upload_airtable(&login, &email, &twitter, is_watching).await;
                     } else {
-                        break;
+                        // count_out_of_range += 1;
+                        // if count_out_of_range > 10 {
+                        //     break 'outer;
+                        // }
                     }
-                } else {
-                    break;
                 }
-            } else {
-                break;
+                (_, _) => {}
             }
-        } else {
-            break;
         }
+        {}
     }
 
     Ok(())
@@ -312,7 +220,7 @@ async fn track_stargazers(
 
         log::info!("{:?}", response);
         // let response: GraphQLResponse = octocrab.graphql(&query_payload).await?;
-/*         if let Some(repository_data) = response.data {
+        /*         if let Some(repository_data) = response.data {
             if let Some(repository) = repository_data.repository {
                 if let Some(stargazers) = repository.stargazers {
                     if let Some(edges) = stargazers.edges {
