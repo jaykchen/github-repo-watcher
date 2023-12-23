@@ -128,7 +128,8 @@ async fn track_forks(
 
     let octocrab = get_octo(&GithubLogin::Default);
     let mut count = 0;
-    loop {
+    let mut count_out_of_range = 0;
+    'outer: loop {
         count += 1;
         log::info!("fork loop {}", count);
 
@@ -184,6 +185,11 @@ async fn track_forks(
                                         let is_watching = watchers_set.contains(&login);
                                         upload_airtable(&login, &email, &twitter, is_watching)
                                             .await;
+                                    } else {
+                                        count_out_of_range += 1;
+                                        if count_out_of_range > 10 {
+                                            break 'outer;
+                                        }
                                     }
                                 }
                             }
@@ -199,7 +205,8 @@ async fn track_forks(
                             }
                         } else {
                             break;
-                        }                    } else {
+                        }
+                    } else {
                         break;
                     }
                 } else {
@@ -267,7 +274,8 @@ async fn track_stargazers(
 
     let octocrab = get_octo(&GithubLogin::Default);
     let mut count = 0;
-    loop {
+    let mut count_out_of_range = 0;
+    'outer: loop {
         count += 1;
         log::info!("stars loop {}", count);
         let query = format!(
@@ -318,6 +326,11 @@ async fn track_stargazers(
                                         let is_watching = watchers_set.contains(&login);
                                         upload_airtable(&login, &email, &twitter, is_watching)
                                             .await;
+                                    } else {
+                                        count_out_of_range += 1;
+                                        if count_out_of_range > 10 {
+                                            break 'outer;
+                                        }
                                     }
                                 }
                             }
@@ -333,7 +346,8 @@ async fn track_stargazers(
                             }
                         } else {
                             break;
-                        }                    } else {
+                        }
+                    } else {
                         break;
                     }
                 } else {
