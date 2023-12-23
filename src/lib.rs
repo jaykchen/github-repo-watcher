@@ -127,13 +127,16 @@ async fn track_forks(
     let mut after_cursor: Option<String> = None;
 
     let octocrab = get_octo(&GithubLogin::Default);
-
+let mut count = 0;
     loop {
+        count += 1;
+        log::info!("fork loop {}", count);
+
         let query = format!(
             r#"
             query {{
                 repository(owner: "{}", name: "{}") {{
-                    forks(first: {}, after: {}) {{
+                    forks(first: {}, after: {}, orderBy: {{field: CREATED_AT, direction: DESC}}) {{
                         edges {{
                             node {{
                                 id
@@ -258,13 +261,15 @@ async fn track_stargazers(
     let mut after_cursor: Option<String> = None;
 
     let octocrab = get_octo(&GithubLogin::Default);
-
+let mut count = 0;
     loop {
+        count += 1;
+        log::info!("stars loop {}", count);
         let query = format!(
             r#"
             query {{
                 repository(owner: "{}", name: "{}") {{
-                    stargazers(first: {}, after: {}) {{
+                    stargazers(first: {}, after: {}, orderBy: {{field: STARRED_AT, direction: DESC}}) {{
                         edges {{
                             node {{
                                 id
@@ -411,8 +416,11 @@ async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>
     let mut watchers_set = HashSet::<String>::new();
     let octocrab = get_octo(&GithubLogin::Default);
     let mut before_cursor = None;
-
+let mut count = 0;
     loop {
+        count += 1;
+        log::info!("watcher loop {}", count);
+
         let query = format!(
             r#"
             query {{
