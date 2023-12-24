@@ -20,3 +20,4 @@ schedule-flows = "0.3.0"
 chrono = "0.4.31"
 github-flows = "0.7.0"
 octocrab_wasi = { version = "0.19.1", features = ["wasi"], default-features = false }
+graphql_client = "0.13.0"

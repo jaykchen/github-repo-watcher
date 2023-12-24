@@ -8,6 +8,17 @@ use schedule_flows::{schedule_cron_job, schedule_handler};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::{collections::HashSet, env};
+use graphql_client::{GraphQLQuery, Response};
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/github_schema.graphql",
+    query_path = "src/forks_query.graphql",
+    variables_derives = "Clone, Debug",
+    response_derives = "Clone, Debug"
+)]
+pub struct ForksQuery;
+
 
 #[no_mangle]
 #[tokio::main(flavor = "current_thread")]
@@ -74,6 +85,14 @@ async fn track_forks(
     watchers_set: &HashSet<String>,
     date: &NaiveDate,
 ) -> anyhow::Result<()> {
+    use github_flows::octocrab;
+    let mut variables = forks_query::Variables {
+        owner: owner.to_string(),
+        repo: repo.to_string(),
+        after: None,
+    };
+
+
     let octocrab = get_octo(&GithubLogin::Default);
     use github_flows::octocrab::params::repos::forks::Sort;
 
@@ -82,21 +101,26 @@ async fn track_forks(
     'outer: for n in 1u32..100 {
         log::info!("fork loop {}", n);
 
-        let response = match octocrab
-            .repos(owner, repo)
-            .list_forks()
-            // .sort(github_flows::octocrab::params::repos::forks::Sort::Newest)
-            .page(n)
-            .per_page(100)
-            .send()
-            .await
-        {
-            Ok(response) => response,
-            Err(e) => {
-                log::error!("Failed to list forks on page {}: {:?}", n, e);
-                break;
-            }
-        };
+        let response: octocrab::Result<graphql_client::Response<forks_query::ResponseData>> =
+            octocrab
+                .graphql(&ForksQuery::build_query(variables.clone()))
+                .await;
+
+        // let response = match octocrab
+        //     .repos(owner, repo)
+        //     .list_forks()
+        //     // .sort(github_flows::octocrab::params::repos::forks::Sort::Newest)
+        //     .page(n)
+        //     .per_page(100)
+        //     .send()
+        //     .await
+        // {
+        //     Ok(response) => response,
+        //     Err(e) => {
+        //         log::error!("Failed to list forks on page {}: {:?}", n, e);
+        //         break;
+        //     }
+        // };
 
         if response.items.is_empty() {
             log::info!("No more forks to process, stopping at page {}", n);
