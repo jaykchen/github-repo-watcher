@@ -15,7 +15,7 @@ pub async fn on_deploy() {
     // schedule_cron_job(String::from("0 11 * * *"), String::from("cron_job_evoked")).await;
 
     let now = Utc::now();
-    let now_minute = now.minute() + 2;
+    let now_minute = now.minute() + 1;
     let cron_time = format!(
         "{:02} {:02} {:02} {:02} *",
         now_minute,
