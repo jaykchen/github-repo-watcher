@@ -39,8 +39,8 @@ async fn handler(body: Vec<u8>) {
     let watchers = HashSet::new();
     // match get_watchers(&owner, &repo).await {
     //     Ok(watchers) => {
-          let _ = track_forks(&owner, &repo, &watchers, &n_days_ago).await;
-          
+    let _ = track_forks(&owner, &repo, &watchers, &n_days_ago).await;
+
     //         // if let Err(e) = track_stargazers(&owner, &repo, &watchers, &n_days_ago).await {
     //         //     log::error!("Failed to track stargazers: {:?}", e);
     //         // }
@@ -75,71 +75,148 @@ async fn track_forks(
     watchers_set: &HashSet<String>,
     date: &NaiveDate,
 ) -> anyhow::Result<()> {
+    #[derive(Serialize, Deserialize, Debug)]
+    struct GraphQLResponse {
+        data: Option<RepositoryData>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct RepositoryData {
+        repository: Option<Repository>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct Repository {
+        forks: Option<ForkConnection>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct Edge {
+        node: Option<ForkNode>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct ForkNode {
+        id: Option<String>,
+        name: Option<String>,
+        owner: Option<Owner>,
+        #[serde(rename = "createdAt")]
+        created_at: Option<String>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct Owner {
+        login: Option<String>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct PageInfo {
+        #[serde(rename = "endCursor")]
+        end_cursor: Option<String>,
+        #[serde(rename = "hasNextPage")]
+        has_next_page: Option<bool>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct ForkConnection {
+        edges: Option<Vec<Edge>>,
+        #[serde(rename = "pageInfo")]
+        page_info: Option<PageInfo>, // Add this field to your ForkConnection struct
+    }
+
+    let mut after_cursor: Option<String> = None;
+    let first: i32 = 100;
+
     let octocrab = get_octo(&GithubLogin::Default);
-    // use github_flows::octocrab::params::repos::forks::Sort;
-
+    let mut count = 0;
     let mut count_out_of_range = 0;
+    'outer: loop {
+        count += 1;
+        log::info!("fork loop {}", count);
 
-    'outer: for n in 1u32..100 {
-        log::info!("fork loop {}", n);
+        let query = format!(
+            r#"
+            query {{
+                repository(owner: "{}", name: "{}") {{
+                    forks(first: 100, after: {}, orderBy: {{field: CREATED_AT, direction: DESC}}) {{
+                        edges {{
+                            node {{
+                                id
+                                name
+                                owner {{
+                                    login
+                                }}
+                                createdAt
+                            }}
+                        }}
+                        pageInfo {{
+                            endCursor
+                            hasNextPage
+                        }}
+                    }}
+                }}
+            }}
+            "#,
+            owner,
+            repo,
+            after_cursor
+                .as_ref()
+                .map_or("null".to_string(), |cursor| format!(r#""{}""#, cursor))
+        );
+        log::info!("query {}", query);
 
-        let response = match octocrab
-            .repos(owner, repo)
-            .list_forks()
-            // .sort(github_flows::octocrab::params::repos::forks::Sort::Newest)
-            .page(n)
-            .per_page(100)
-            .send()
-            .await
-        {
-            Ok(response) => response,
-            Err(e) => {
-                log::error!("Failed to list forks on page {}: {:?}", n, e);
+        let response: GraphQLResponse = octocrab.graphql(&query).await?;
+        if let Some(repository_data) = response.data {
+            if let Some(repository) = repository_data.repository {
+                if let Some(forks) = repository.forks {
+                    if let Some(edges) = forks.edges {
+                        for edge in edges {
+                            if let Some(node) = edge.node {
+                                if let (Some(login), Some(created_at_str)) =
+                                    (node.owner.and_then(|o| o.login), node.created_at)
+                                {
+                                    let fork_created_at =
+                                        DateTime::parse_from_rfc3339(&created_at_str)?;
+                                    let fork_date = fork_created_at.naive_utc().date();
+
+                                    if fork_date >= *date {
+                                        let (email, twitter) = get_user_data(&login).await?;
+                                        // log::info!("{} {} {}", &login, email, twitter);
+                                        let is_watching = watchers_set.contains(&login);
+                                        upload_airtable(&login, &email, &twitter, is_watching)
+                                            .await;
+                                    } else {
+                                        // count_out_of_range += 1;
+                                        // if count_out_of_range > 10 {
+                                        //     break 'outer;
+                                        // }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(page_info) = forks.page_info {
+                        if let Some(has_next_page) = page_info.has_next_page {
+                            if has_next_page {
+                                after_cursor = page_info.end_cursor; // Update the cursor for the next page
+                            } else {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            } else {
                 break;
             }
-        };
-
-        if response.items.is_empty() {
-            log::info!("No more forks to process, stopping at page {}", n);
+        } else {
             break;
-        }
-
-        for fork in response.items {
-            match (fork.owner.and_then(|o| Some(o.login)), fork.created_at) {
-                (Some(login), Some(ref created_at)) => {
-                    // let fork_date = fork.created_at.unwrap().naive_utc().date();
-
-                    let fork_date = match &created_at {
-                        DateTimeOrU64::DateTime(fork_created_at) => {
-                            fork_created_at.naive_utc().date()
-                        }
-                        DateTimeOrU64::U64(unix_timestamp) => {
-                            Utc.timestamp(*unix_timestamp as i64, 0).naive_utc().date()
-                        }
-                        _ => {
-                            log::error!("No fork_date was determined");
-                            continue;
-                        }
-                    };
-
-                    if fork_date >= *date {
-                        let (email, twitter) = get_user_data(&login).await?;
-                        // log::info!("{} {} {}", &login, email, twitter);
-                        log::info!("{}  {}", &login, fork_date);
-                        let is_watching = watchers_set.contains(&login);
-                        upload_airtable(&login, &email, &twitter, is_watching).await;
-                    } else {
-                        // count_out_of_range += 1;
-                        // if count_out_of_range > 10 {
-                        //     break 'outer;
-                        // }
-                    }
-                }
-                (_, _) => {}
-            }
-        }
-        if n >= 3 {
-            // break;
         }
     }
 
@@ -182,13 +259,16 @@ async fn track_stargazers(
 
     #[derive(Serialize, Deserialize, Debug)]
     struct PageInfo {
+        #[serde(rename = "endCursor")]
         end_cursor: Option<String>,
+        #[serde(rename = "hasNextPage")]
         has_next_page: Option<bool>,
     }
 
     #[derive(Serialize, Deserialize, Debug)]
     struct StargazerConnection {
         edges: Option<Vec<StargazerEdge>>,
+        #[serde(rename = "pageInfo")]
         page_info: Option<PageInfo>,
     }
 
