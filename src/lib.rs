@@ -36,17 +36,18 @@ async fn handler(body: Vec<u8>) {
     let now = Utc::now();
     let n_days_ago = (now - Duration::days(7)).date_naive();
 
-    match get_watchers(&owner, &repo).await {
-        Ok(watchers) => {
+    let watchers = HashSet::new();
+    // match get_watchers(&owner, &repo).await {
+    //     Ok(watchers) => {
           let _ = track_forks(&owner, &repo, &watchers, &n_days_ago).await;
           
-            // if let Err(e) = track_stargazers(&owner, &repo, &watchers, &n_days_ago).await {
-            //     log::error!("Failed to track stargazers: {:?}", e);
-            // }
-        }
+    //         // if let Err(e) = track_stargazers(&owner, &repo, &watchers, &n_days_ago).await {
+    //         //     log::error!("Failed to track stargazers: {:?}", e);
+    //         // }
+    //     }
 
-        Err(e) => log::error!("Failed to get watchers: {:?}", e),
-    }
+    //     Err(e) => log::error!("Failed to get watchers: {:?}", e),
+    // }
 }
 
 pub async fn upload_airtable(login: &str, email: &str, twitter_username: &str, watching: bool) {
@@ -75,7 +76,7 @@ async fn track_forks(
     date: &NaiveDate,
 ) -> anyhow::Result<()> {
     let octocrab = get_octo(&GithubLogin::Default);
-    use github_flows::octocrab::params::repos::forks::Sort;
+    // use github_flows::octocrab::params::repos::forks::Sort;
 
     let mut count_out_of_range = 0;
 
@@ -106,6 +107,8 @@ async fn track_forks(
         for fork in response.items {
             match (fork.owner.and_then(|o| Some(o.login)), fork.created_at) {
                 (Some(login), Some(ref created_at)) => {
+                    // let fork_date = fork.created_at.unwrap().naive_utc().date();
+
                     let fork_date = match &created_at {
                         DateTimeOrU64::DateTime(fork_created_at) => {
                             fork_created_at.naive_utc().date()
@@ -122,6 +125,7 @@ async fn track_forks(
                     if fork_date >= *date {
                         let (email, twitter) = get_user_data(&login).await?;
                         // log::info!("{} {} {}", &login, email, twitter);
+                        log::info!("{}  {}", &login, fork_date);
                         let is_watching = watchers_set.contains(&login);
                         upload_airtable(&login, &email, &twitter, is_watching).await;
                     } else {
@@ -135,7 +139,7 @@ async fn track_forks(
             }
         }
         if n >= 3 {
-            break;
+            // break;
         }
     }
 
