@@ -1,9 +1,11 @@
 use airtable_flows::create_record;
 use anyhow;
-use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Timelike, Utc};
+// use chrono::TimeZone;
+use chrono::{DateTime, Datelike, Duration, NaiveDate, Timelike, Utc};
 use dotenv::dotenv;
 use flowsnet_platform_sdk::logger;
-use github_flows::{get_octo, octocrab::models::DateTimeOrU64, GithubLogin};
+// use github_flows::octocrab::models::DateTimeOrU64;
+use github_flows::{get_octo, GithubLogin};
 use schedule_flows::{schedule_cron_job, schedule_handler};
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -36,17 +38,9 @@ async fn handler(body: Vec<u8>) {
     let now = Utc::now();
     let n_days_ago = (now - Duration::days(1)).date_naive();
 
-    match get_watchers(&owner, &repo).await {
-        Ok(watchers) => {
-            if let Err(e) = track_forks(&owner, &repo, &watchers, &n_days_ago).await {
-                log::error!("Failed to track forks: {:?}", e);
-            }
-            if let Err(e) = track_stargazers(&owner, &repo, &watchers, &n_days_ago).await {
-                log::error!("Failed to track stargazers: {:?}", e);
-            }
-        }
-
-        Err(e) => log::error!("Failed to get watchers: {:?}", e),
+    if let Ok(watchers) = get_watchers(&owner, &repo).await {
+        let _ = track_forks(&owner, &repo, &watchers, &n_days_ago).await;
+        let _ = track_stargazers(&owner, &repo, &watchers, &n_days_ago).await;
     }
 }
 
@@ -163,49 +157,39 @@ async fn track_forks(
         log::info!("query {}", query);
 
         let response: GraphQLResponse = octocrab.graphql(&query).await?;
-        if let Some(repository_data) = response.data {
-            if let Some(repository) = repository_data.repository {
-                if let Some(forks) = repository.forks {
-                    if let Some(edges) = forks.edges {
-                        for edge in edges {
-                            if let Some(node) = edge.node {
-                                if let (Some(login), Some(created_at_str)) =
-                                    (node.owner.and_then(|o| o.login), node.created_at)
-                                {
-                                    let fork_created_at =
-                                        DateTime::parse_from_rfc3339(&created_at_str)?;
-                                    let fork_date = fork_created_at.naive_utc().date();
-                                    if count_out_of_range > 10 {
-                                        break 'outer;
-                                    }
+        let repository = response
+            .data
+            .and_then(|data| data.repository)
+            .and_then(|repo| repo.forks);
 
-                                    if fork_date >= *date {
-                                        let (email, twitter) = get_user_data(&login).await?;
-                                        // log::info!("{} {} {}", &login, email, twitter);
-                                        let is_watching = watchers_set.contains(&login);
-                                        upload_airtable(&login, &email, &twitter, is_watching)
-                                            .await;
-                                    } else {
-                                        count_out_of_range += 1;
-                                    }
-                                }
-                            }
+        if let Some(forks) = repository {
+            for edge in forks.edges.unwrap_or_default() {
+                if let Some(node) = edge.node {
+                    if let (Some(login), Some(created_at_str)) =
+                        (node.owner.and_then(|o| o.login), node.created_at)
+                    {
+                        let fork_created_at = DateTime::parse_from_rfc3339(&created_at_str)?;
+                        let fork_date = fork_created_at.naive_utc().date();
+
+                        if count_out_of_range > 10 {
+                            break 'outer;
                         }
-                    }
 
-                    if let Some(page_info) = forks.page_info {
-                        if let Some(has_next_page) = page_info.has_next_page {
-                            if has_next_page {
-                                after_cursor = page_info.end_cursor; // Update the cursor for the next page
-                            } else {
-                                break;
-                            }
+                        if fork_date >= *date {
+                            let (email, twitter) = get_user_data(&login).await?;
+                            // log::info!("{} {} {}", &login, email, twitter);
+                            let is_watching = watchers_set.contains(&login);
+                            upload_airtable(&login, &email, &twitter, is_watching).await;
                         } else {
-                            break;
+                            count_out_of_range += 1;
                         }
-                    } else {
-                        break;
                     }
+                }
+            }
+
+            if let Some(page_info) = forks.page_info {
+                if page_info.has_next_page.unwrap_or(false) {
+                    after_cursor = page_info.end_cursor; // Update the cursor for the next page
                 } else {
                     break;
                 }
@@ -270,17 +254,16 @@ async fn track_stargazers(
     }
 
     let mut after_cursor: Option<String> = None;
-
     let octocrab = get_octo(&GithubLogin::Default);
-
     let mut count_out_of_range = 0;
+
     'outer: for _n in 1..100 {
         log::info!("stargazers loop {}", _n);
 
         let query_str = format!(
             r#"query {{
-                repository(owner: "{owner}", name: "{repo}") {{
-                    stargazers(first: 100, after: {after_cursor}, orderBy: {{field: STARRED_AT, direction: DESC}}) {{
+                repository(owner: "{}", name: "{}") {{
+                    stargazers(first: 100, after: {}, orderBy: {{field: STARRED_AT, direction: DESC}}) {{
                         edges {{
                             node {{
                                 id
@@ -295,86 +278,69 @@ async fn track_stargazers(
                     }}
                 }}
             }}"#,
-            owner = owner,
-            repo = repo,
-            after_cursor = after_cursor
+            owner,
+            repo,
+            after_cursor
                 .as_ref()
                 .map_or("null".to_string(), |cursor| format!(r#""{}""#, cursor))
         );
 
-        let query_payload = serde_json::json!({
-            "query": query_str,
-        });
-        log::info!("{}", query_payload.clone());
+        log::info!("{}", query_str);
 
-        let response: GraphQLResponse = octocrab.graphql(&query_payload).await?;
-        if let Some(repository_data) = response.data {
-            if let Some(repository) = repository_data.repository {
-                if let Some(stargazers) = repository.stargazers {
-                    if let Some(edges) = stargazers.edges {
-                        for edge in edges {
-                            if let Some(node) = edge.node {
-                                if let Some(login) = node.login {
-                                    if let Some(starred_at_str) = edge.starred_at {
-                                        match DateTime::parse_from_rfc3339(&starred_at_str) {
-                                            Ok(stargazer_starred_at) => {
-                                                let stargazer_date =
-                                                    stargazer_starred_at.naive_utc().date();
-                                                if count_out_of_range > 10 {
-                                                    break 'outer;
-                                                }
-                                                if stargazer_date >= *date {
-                                                    if let Ok((email, twitter)) =
-                                                        get_user_data(&login).await
-                                                    {
-                                                        let is_watching =
-                                                            watchers_set.contains(&login);
-                                                        let _ = upload_airtable(
-                                                            &login,
-                                                            &email,
-                                                            &twitter,
-                                                            is_watching,
-                                                        )
-                                                        .await;
-                                                    } else {
-                                                        log::error!(
-                                                            "Failed to get user data for login: {}",
-                                                            login
-                                                        );
-                                                    }
-                                                } else {
-                                                    count_out_of_range += 1;
-                                                }
-                                            }
-                                            Err(e) => {
-                                                log::error!("Failed to parse star date: {}", e)
-                                            }
+        let response: GraphQLResponse = octocrab.graphql(&query_str).await?;
+        let stargazers = response
+            .data
+            .and_then(|data| data.repository)
+            .and_then(|repo| repo.stargazers);
+
+        if let Some(stargazers) = stargazers {
+            for edge in stargazers.edges.unwrap_or_default() {
+                if let Some(node) = edge.node {
+                    if let (Some(login), Some(starred_at_str)) = (node.login, edge.starred_at) {
+                        match DateTime::parse_from_rfc3339(&starred_at_str) {
+                            Ok(stargazer_starred_at) => {
+                                let stargazer_date = stargazer_starred_at.naive_utc().date();
+
+                                if count_out_of_range > 10 {
+                                    break 'outer;
+                                }
+
+                                if stargazer_date >= *date {
+                                    match get_user_data(&login).await {
+                                        Ok((email, twitter)) => {
+                                            let is_watching = watchers_set.contains(&login);
+                                            let _ = upload_airtable(
+                                                &login,
+                                                &email,
+                                                &twitter,
+                                                is_watching,
+                                            )
+                                            .await;
                                         }
+                                        Err(e) => log::error!(
+                                            "Failed to get user data for login: {}: {}",
+                                            login,
+                                            e
+                                        ),
                                     }
+                                } else {
+                                    count_out_of_range += 1;
                                 }
                             }
+                            Err(e) => log::error!("Failed to parse star date: {}", e),
                         }
                     }
+                }
+            }
 
-                    if let Some(page_info) = stargazers.page_info {
-                        if let Some(has_next_page) = page_info.has_next_page {
-                            if has_next_page {
-                                after_cursor = page_info.end_cursor; // Update the cursor for the next page
-                            } else {
-                                break;
-                            }
-                        } else {
-                            log::error!("hasNextPage is missing from pageInfo");
-                            break;
-                        }
-                    } else {
-                        log::error!("pageInfo is missing from the response");
-                        break;
-                    }
+            if let Some(page_info) = stargazers.page_info {
+                if page_info.has_next_page.unwrap_or(false) {
+                    after_cursor = page_info.end_cursor; // Update the cursor for the next page
                 } else {
                     break;
                 }
             } else {
+                log::error!("pageInfo is missing from the response");
                 break;
             }
         } else {
@@ -390,7 +356,6 @@ async fn get_user_data(login: &str) -> anyhow::Result<(String, String)> {
     struct UserProfile {
         login: String,
         company: Option<String>,
-        blog: Option<String>,
         location: Option<String>,
         email: Option<String>,
         twitter_username: Option<String>,
@@ -493,40 +458,29 @@ async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>
         );
 
         let response: GraphQLResponse = octocrab.graphql(&query).await?;
-        if let Some(data) = response.data {
-            if let Some(repository) = data.repository {
-                if let Some(watchers) = repository.watchers {
-                    if let Some(edges) = watchers.edges {
-                        for edge in edges {
-                            if let Some(node) = edge.node {
-                                watchers_set.insert(node.login);
-                            }
-                        }
-                    }
-                    if let Some(page_info) = watchers.page_info {
-                        if let Some(has_next_page) = page_info.has_next_page {
-                            if has_next_page {
-                                after_cursor = page_info.end_cursor; // Update the cursor for the next page
-                            } else {
-                                break;
-                            }
-                        } else {
-                            break;
-                        }
-                    } else {
-                        break;
-                    }
-                } else {
-                    break;
+        let watchers = response
+            .data
+            .and_then(|data| data.repository)
+            .and_then(|repo| repo.watchers);
+
+        if let Some(watchers) = watchers {
+            for edge in watchers.edges.unwrap_or_default() {
+                if let Some(node) = edge.node {
+                    watchers_set.insert(node.login);
                 }
-            } else {
-                break;
+            }
+
+            match watchers.page_info {
+                Some(page_info) if page_info.has_next_page.unwrap_or(false) => {
+                    after_cursor = page_info.end_cursor; // Update the cursor for the next page
+                }
+                _ => break,
             }
         } else {
             break;
         }
     }
-    if watchers_set.len() > 0 {
+    if !watchers_set.is_empty() {
         Ok(watchers_set)
     } else {
         Err(anyhow::anyhow!("no watchers"))
