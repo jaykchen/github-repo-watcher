@@ -34,20 +34,20 @@ async fn handler(body: Vec<u8>) {
     let repo = env::var("repo").unwrap_or("wasmedge".to_string());
 
     let now = Utc::now();
-    let n_days_ago = (now - Duration::days(7)).date_naive();
+    let n_days_ago = (now - Duration::days(1)).date_naive();
 
-    let watchers = HashSet::new();
-    // match get_watchers(&owner, &repo).await {
-    //     Ok(watchers) => {
-    let _ = track_forks(&owner, &repo, &watchers, &n_days_ago).await;
+    match get_watchers(&owner, &repo).await {
+        Ok(watchers) => {
+            if let Err(e) = track_forks(&owner, &repo, &watchers, &n_days_ago).await {
+                log::error!("Failed to track forks: {:?}", e);
+            }
+            if let Err(e) = track_stargazers(&owner, &repo, &watchers, &n_days_ago).await {
+                log::error!("Failed to track stargazers: {:?}", e);
+            }
+        }
 
-    //         // if let Err(e) = track_stargazers(&owner, &repo, &watchers, &n_days_ago).await {
-    //         //     log::error!("Failed to track stargazers: {:?}", e);
-    //         // }
-    //     }
-
-    //     Err(e) => log::error!("Failed to get watchers: {:?}", e),
-    // }
+        Err(e) => log::error!("Failed to get watchers: {:?}", e),
+    }
 }
 
 pub async fn upload_airtable(login: &str, email: &str, twitter_username: &str, watching: bool) {
@@ -125,14 +125,11 @@ async fn track_forks(
     }
 
     let mut after_cursor: Option<String> = None;
-    let first: i32 = 100;
 
     let octocrab = get_octo(&GithubLogin::Default);
-    let mut count = 0;
     let mut count_out_of_range = 0;
-    'outer: loop {
-        count += 1;
-        log::info!("fork loop {}", count);
+    'outer: for _n in 1..100 {
+        log::info!("fork loop {}", _n);
 
         let query = format!(
             r#"
@@ -178,6 +175,9 @@ async fn track_forks(
                                     let fork_created_at =
                                         DateTime::parse_from_rfc3339(&created_at_str)?;
                                     let fork_date = fork_created_at.naive_utc().date();
+                                    if count_out_of_range > 10 {
+                                        break 'outer;
+                                    }
 
                                     if fork_date >= *date {
                                         let (email, twitter) = get_user_data(&login).await?;
@@ -186,10 +186,7 @@ async fn track_forks(
                                         upload_airtable(&login, &email, &twitter, is_watching)
                                             .await;
                                     } else {
-                                        // count_out_of_range += 1;
-                                        // if count_out_of_range > 10 {
-                                        //     break 'outer;
-                                        // }
+                                        count_out_of_range += 1;
                                     }
                                 }
                             }
@@ -276,15 +273,14 @@ async fn track_stargazers(
 
     let octocrab = get_octo(&GithubLogin::Default);
 
-    let mut count = 0;
     let mut count_out_of_range = 0;
-    'outer: loop {
-        count += 1;
-        log::info!("stars loop {}", count);
+    'outer: for _n in 1..100 {
+        log::info!("stargazers loop {}", _n);
+
         let query_str = format!(
             r#"query {{
                 repository(owner: "{owner}", name: "{repo}") {{
-                    stargazers(first: 2, after: {after_cursor}, orderBy: {{field: STARRED_AT, direction: DESC}}) {{
+                    stargazers(first: 100, after: {after_cursor}, orderBy: {{field: STARRED_AT, direction: DESC}}) {{
                         edges {{
                             node {{
                                 id
@@ -311,13 +307,8 @@ async fn track_stargazers(
         });
         log::info!("{}", query_payload.clone());
 
-        let response_text: String = octocrab.graphql(&query_payload).await?;
-
-        let response: GraphQLResponse = serde_json::from_str(&response_text)?;
-
-        log::info!("{:?}", response);
-        // let response: GraphQLResponse = octocrab.graphql(&query_payload).await?;
-        /*         if let Some(repository_data) = response.data {
+        let response: GraphQLResponse = octocrab.graphql(&query_payload).await?;
+        if let Some(repository_data) = response.data {
             if let Some(repository) = repository_data.repository {
                 if let Some(stargazers) = repository.stargazers {
                     if let Some(edges) = stargazers.edges {
@@ -329,7 +320,9 @@ async fn track_stargazers(
                                             Ok(stargazer_starred_at) => {
                                                 let stargazer_date =
                                                     stargazer_starred_at.naive_utc().date();
-
+                                                if count_out_of_range > 10 {
+                                                    break 'outer;
+                                                }
                                                 if stargazer_date >= *date {
                                                     if let Ok((email, twitter)) =
                                                         get_user_data(&login).await
@@ -350,10 +343,7 @@ async fn track_stargazers(
                                                         );
                                                     }
                                                 } else {
-                                                    // count_out_of_range += 1;
-                                                    // if count_out_of_range > 10 {
-                                                    //     break 'outer;
-                                                    // }
+                                                    count_out_of_range += 1;
                                                 }
                                             }
                                             Err(e) => {
@@ -389,7 +379,7 @@ async fn track_stargazers(
             }
         } else {
             break;
-        } */
+        }
     }
 
     Ok(())
@@ -471,10 +461,10 @@ async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>
     let mut watchers_set = HashSet::<String>::new();
     let octocrab = get_octo(&GithubLogin::Default);
     let mut after_cursor = None;
-    let mut count = 0;
-    loop {
-        count += 1;
-        // log::info!("watchers loop {}", count);
+
+    for _n in 1..50 {
+        // log::info!("watchers loop {}", _n);
+
         let query = format!(
             r#"
             query {{
