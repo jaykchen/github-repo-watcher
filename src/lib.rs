@@ -34,7 +34,7 @@ async fn handler(body: Vec<u8>) {
     let repo = env::var("repo").unwrap_or("wasmedge".to_string());
 
     let now = Utc::now();
-    let n_days_ago = (now - Duration::days(1)).date_naive();
+    let n_days_ago = (now - Duration::days(7)).date_naive();
 
     let mut found_logins_set = HashSet::new();
     if let Ok(watchers) = get_watchers(&owner, &repo).await {
