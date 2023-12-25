@@ -1,10 +1,8 @@
 use airtable_flows::create_record;
 use anyhow;
-// use chrono::TimeZone;
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Timelike, Utc};
 use dotenv::dotenv;
 use flowsnet_platform_sdk::logger;
-// use github_flows::octocrab::models::DateTimeOrU64;
 use github_flows::{get_octo, GithubLogin};
 use schedule_flows::{schedule_cron_job, schedule_handler};
 use serde::{Deserialize, Serialize};
@@ -38,9 +36,11 @@ async fn handler(body: Vec<u8>) {
     let now = Utc::now();
     let n_days_ago = (now - Duration::days(1)).date_naive();
 
+    let mut found_logins_set = HashSet::new();
     if let Ok(watchers) = get_watchers(&owner, &repo).await {
-        let _ = track_forks(&owner, &repo, &watchers, &n_days_ago).await;
-        let _ = track_stargazers(&owner, &repo, &watchers, &n_days_ago).await;
+        let _ = track_forks(&owner, &repo, &watchers, &mut found_logins_set, &n_days_ago).await;
+        let _ =
+            track_stargazers(&owner, &repo, &watchers, &mut found_logins_set, &n_days_ago).await;
     }
 }
 
@@ -67,6 +67,7 @@ async fn track_forks(
     owner: &str,
     repo: &str,
     watchers_set: &HashSet<String>,
+    found_set: &mut HashSet<String>,
     date: &NaiveDate,
 ) -> anyhow::Result<()> {
     #[derive(Serialize, Deserialize, Debug)]
@@ -115,13 +116,13 @@ async fn track_forks(
     struct ForkConnection {
         edges: Option<Vec<Edge>>,
         #[serde(rename = "pageInfo")]
-        page_info: Option<PageInfo>, // Add this field to your ForkConnection struct
+        page_info: Option<PageInfo>,
     }
 
     let mut after_cursor: Option<String> = None;
-
     let octocrab = get_octo(&GithubLogin::Default);
     let mut count_out_of_range = 0;
+
     'outer: for _n in 1..100 {
         log::info!("fork loop {}", _n);
 
@@ -176,6 +177,9 @@ async fn track_forks(
                         }
 
                         if fork_date >= *date {
+                            if !found_set.insert(login.clone()) {
+                                continue;
+                            }
                             let (email, twitter) = get_user_data(&login).await?;
                             // log::info!("{} {} {}", &login, email, twitter);
                             let is_watching = watchers_set.contains(&login);
@@ -189,7 +193,7 @@ async fn track_forks(
 
             if let Some(page_info) = forks.page_info {
                 if page_info.has_next_page.unwrap_or(false) {
-                    after_cursor = page_info.end_cursor; // Update the cursor for the next page
+                    after_cursor = page_info.end_cursor;
                 } else {
                     break;
                 }
@@ -208,6 +212,7 @@ async fn track_stargazers(
     owner: &str,
     repo: &str,
     watchers_set: &HashSet<String>,
+    found_set: &mut HashSet<String>,
     date: &NaiveDate,
 ) -> anyhow::Result<()> {
     #[derive(Serialize, Deserialize, Debug)]
@@ -306,23 +311,12 @@ async fn track_stargazers(
                                 }
 
                                 if stargazer_date >= *date {
-                                    match get_user_data(&login).await {
-                                        Ok((email, twitter)) => {
-                                            let is_watching = watchers_set.contains(&login);
-                                            let _ = upload_airtable(
-                                                &login,
-                                                &email,
-                                                &twitter,
-                                                is_watching,
-                                            )
-                                            .await;
-                                        }
-                                        Err(e) => log::error!(
-                                            "Failed to get user data for login: {}: {}",
-                                            login,
-                                            e
-                                        ),
+                                    if !found_set.insert(login.clone()) {
+                                        continue;
                                     }
+                                    let (email, twitter) = get_user_data(&login).await?;
+                                    let is_watching = watchers_set.contains(&login);
+                                    upload_airtable(&login, &email, &twitter, is_watching).await;
                                 } else {
                                     count_out_of_range += 1;
                                 }
@@ -335,7 +329,7 @@ async fn track_stargazers(
 
             if let Some(page_info) = stargazers.page_info {
                 if page_info.has_next_page.unwrap_or(false) {
-                    after_cursor = page_info.end_cursor; // Update the cursor for the next page
+                    after_cursor = page_info.end_cursor;
                 } else {
                     break;
                 }
@@ -472,7 +466,7 @@ async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>
 
             match watchers.page_info {
                 Some(page_info) if page_info.has_next_page.unwrap_or(false) => {
-                    after_cursor = page_info.end_cursor; // Update the cursor for the next page
+                    after_cursor = page_info.end_cursor;
                 }
                 _ => break,
             }
