@@ -480,3 +480,214 @@ async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>
         Err(anyhow::anyhow!("no watchers"))
     }
 }
+
+/* pub async fn get_contributors(owner: &str, repo: &str) -> Result<Vec<String>, octocrab::Error> {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct GraphQLResponse {
+        data: Option<OrganizationData>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct OrganizationData {
+        organization: Option<Organization>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct Organization {
+        repository: Option<Repository>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct Repository {
+        id: String,
+        name: String,
+        url: String,
+        default_branch_ref: Option<BranchRef>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct BranchRef {
+        name: String,
+        target: Option<Commit>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct Commit {
+        id: String,
+        history: Option<CommitHistory>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct CommitHistory {
+        page_info: Option<PageInfo>,
+        edges: Option<Vec<CommitEdge>>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct PageInfo {
+        #[serde(rename = "endCursor")]
+        end_cursor: Option<String>,
+        #[serde(rename = "hasNextPage")]
+        has_next_page: bool,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct CommitEdge {
+        node: Option<CommitNode>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct CommitNode {
+        author: Option<Author>,
+        committer: Option<Committer>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct Author {
+        user: Option<GitHubUser>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct Committer {
+        user: Option<GitHubUser>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct GitHubUser {
+        login: String,
+        name: Option<String>,
+    }
+
+    let mut contributors = Vec::new();
+    let octocrab = get_octo(&GithubLogin::Default);
+
+    // <https://api.github.com/repositories/224908244/contributors?per_page=2&page=2>; rel="next", <https://api.github.com/repositories/224908244/contributors?per_page=2&page=79>; rel="last"
+
+    let mut after_cursor = None;
+
+    for _n in 1..50 {
+        log::info!("contributors loop {}", _n);
+
+        let query = format!(
+            r#"
+            query {{
+                (organization(login: "{}") {{
+                repository(name: "{}") {{
+                    id
+                    name
+                    url
+                    defaultBranchRef {{
+                        name
+                        target {{
+                            ... on Commit {{
+                                id
+                                history(first: 100, since: "{}", after: {}) {{
+                                    pageInfo {{
+                                        hasNextPage
+                                        endCursor
+                                    }}
+                                    edges {{
+                                        node {{
+                                            author {{
+                                                user {{
+                                                    login
+                                                    name
+                                                }}
+                                            }}
+                                            committer {{
+                                                user {{
+                                                    login
+                                                    name
+                                                }}
+                                            }}
+                                        }}
+                                    }}
+                                }}
+                            }}
+                        }}
+                    }}
+                }}
+            }}
+        "#,
+            owner,
+            repo,
+            since,
+            after_cursor
+                .as_ref()
+                .map_or("null".to_string(), |c| format!(r#""{}""#, c))
+        );
+
+        let response: GraphQLResponse = octocrab.graphql(&query).await?;
+        let history = response
+            .data
+            .and_then(|data| data.organization)
+            .and_then(|organization| organization.repository)
+            .and_then(|repo| repo.default_branch_ref)
+            .and_then(|default_branch_ref| default_branch_ref.target)
+            .and_then(|target| target.history);
+
+        if let Some(history) = history {
+            for edge in history.edges.unwrap_or_default() {
+                if let Some(node) = edge.node {
+                    if let Some(author) = node.author {
+                        if let Some(user) = author.user {
+                            contributors_set.insert(user.login);
+                        }
+                    }
+                }
+            }
+
+            match history.page_info {
+                Some(page_info) if page_info.has_next_page => {
+                    after_cursor = page_info.end_cursor;
+                }
+                _ => break,
+            }
+        } else {
+            break;
+        }
+    }
+
+    Ok(contributors_set.into_iter().collect())
+} */
+/* query ($org: String!, $repoName: String!, $since: GitTimestamp!, $afterCursor: String) {
+  organization(login: $org) {
+    repository(name: $repoName) {
+      id
+      name
+      url
+      defaultBranchRef {
+        name
+        target {
+          ... on Commit {
+            id
+            history(first: 100, since: $since, after: $afterCursor) {
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+              edges {
+                node {
+                  author {
+                    user {
+                      login
+                      name
+                    }
+                  }
+                  committer {
+                    user {
+                      login
+                      name
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+} */
