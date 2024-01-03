@@ -1,17 +1,11 @@
-use airtable_flows::create_record;
 use anyhow;
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Timelike, Utc};
 use csv::{QuoteStyle, WriterBuilder};
 use dotenv::dotenv;
 use flowsnet_platform_sdk::logger;
-use github_flows::{
-    get_octo,
-    octocrab::{models::gists::Gist, Octocrab},
-    GithubLogin,
-};
+use github_flows::{get_octo, GithubLogin};
 use schedule_flows::{schedule_cron_job, schedule_handler};
 use serde::{Deserialize, Serialize};
-use serde_json;
 use std::{collections::HashSet, env};
 
 #[no_mangle]
@@ -32,11 +26,8 @@ async fn handler(body: Vec<u8>) {
     let owner = env::var("owner").unwrap_or("wasmedge".to_string());
     let repo = env::var("repo").unwrap_or("wasmedge".to_string());
 
-    let private_owner = env::var("private_owner").unwrap_or("jaykchen".to_string());
-    let private_repo = env::var("private_repo").unwrap_or("telegram-demo".to_string());
-
     let now = Utc::now();
-    let n_days_ago = (now - Duration::days(1)).date_naive();
+    let n_days_ago = (now - Duration::days(2)).date_naive();
 
     let mut found_logins_set = HashSet::new();
 
@@ -68,7 +59,7 @@ async fn handler(body: Vec<u8>) {
         .await;
     }
 
-    let _ = upload_to_gist(&private_owner, &private_repo, wtr).await;
+    let _ = upload_to_gist(wtr).await;
 }
 
 async fn track_forks(
@@ -191,8 +182,10 @@ async fn track_forks(
                             }
                             let (email, twitter) = get_user_data(&login).await?;
                             // log::info!("{} {} {}", &login, email, twitter);
-                            let is_watching = watchers_set.contains(&login).to_string();
-                            // upload_airtable(&login, &email, &twitter, is_watching).await;
+                            let is_watching = match watchers_set.contains(&login) {
+                                true => "yes".to_string(),
+                                false => "".to_string(),
+                            };
                             wtr.write_record(&[login, email, twitter, is_watching])
                                 .expect("Failed to write record");
                         } else {
@@ -327,8 +320,10 @@ async fn track_stargazers(
                                         continue;
                                     }
                                     let (email, twitter) = get_user_data(&login).await?;
-                                    let is_watching = watchers_set.contains(&login).to_string();
-                                    // upload_airtable(&login, &email, &twitter, is_watching).await;
+                                    let is_watching = match watchers_set.contains(&login) {
+                                        true => "yes".to_string(),
+                                        false => "".to_string(),
+                                    };
                                     wtr.write_record(&[login, email, twitter, is_watching])
                                         .expect("Failed to write record");
                                 } else {
@@ -357,36 +352,6 @@ async fn track_stargazers(
     }
 
     Ok(())
-}
-
-async fn get_user_data(login: &str) -> anyhow::Result<(String, String)> {
-    #[derive(Serialize, Deserialize, Debug)]
-    struct UserProfile {
-        login: String,
-        company: Option<String>,
-        location: Option<String>,
-        email: Option<String>,
-        twitter_username: Option<String>,
-    }
-
-    let octocrab = get_octo(&GithubLogin::Default);
-    let user_profile_url = format!("users/{}", login);
-
-    match octocrab
-        .get::<UserProfile, _, ()>(&user_profile_url, None::<&()>)
-        .await
-    {
-        Ok(profile) => {
-            let email = profile.email.unwrap_or("no email".to_string());
-            let twitter_username = profile.twitter_username.unwrap_or("no twitter".to_string());
-
-            Ok((email, twitter_username))
-        }
-        Err(e) => {
-            log::error!("Failed to get user info for {}: {:?}", login, e);
-            Err(e.into())
-        }
-    }
 }
 
 async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>> {
@@ -495,67 +460,54 @@ async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>
     }
 }
 
-pub async fn upload_to_gist(
-    owner: &str,
-    repo: &str,
-    wtr: csv::Writer<Vec<u8>>,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn upload_to_gist(wtr: csv::Writer<Vec<u8>>) -> anyhow::Result<()> {
     let octocrab = get_octo(&GithubLogin::Default);
-    let data = wtr
-        .into_inner()
-        .map_err(|err| format!("Failed to finalize CSV writing: {}", err))?;
-
-    let formatted_answer = String::from_utf8(data).expect("Failed to convert to String");
+  
+    let data = wtr.into_inner()?;
+    let formatted_answer = String::from_utf8(data)?;
 
     let check = formatted_answer.chars().take(100).collect::<String>();
     log::info!("before uploading to gist, csv: {}", check);
-    
+
     let filename = format!("report_{}.csv", Utc::now().format("%d-%m-%Y"));
 
-    let gist: Gist = octocrab
+    let _ = octocrab
         .gists()
         .create()
         .description("Daily Tracking Report")
         .public(false) // set to true if you want the gist to be public
         .file(filename, formatted_answer)
         .send()
-        .await?;
-
+        .await;
     Ok(())
 }
 
-/* pub async fn attach_to_issue(owner: &str, repo: &str, wtr: &mut csv::Writer<Vec<u8>>) {
+async fn get_user_data(login: &str) -> anyhow::Result<(String, String)> {
+    #[derive(Serialize, Deserialize, Debug)]
+    struct UserProfile {
+        login: String,
+        company: Option<String>,
+        location: Option<String>,
+        email: Option<String>,
+        twitter_username: Option<String>,
+    }
+
     let octocrab = get_octo(&GithubLogin::Default);
+    let user_profile_url = format!("users/{}", login);
 
-    let data = wtr.into_inner().expect("Failed to finalize CSV writing");
-    let formatted_answer = String::from_utf8(data).expect("Failed to convert to String");
+    match octocrab
+        .get::<UserProfile, _, ()>(&user_profile_url, None::<&()>)
+        .await
+    {
+        Ok(profile) => {
+            let email = profile.email.unwrap_or("".to_string());
+            let twitter_username = profile.twitter_username.unwrap_or("".to_string());
 
-    let tag = format!("Daily Tracking Report - {}", Utc::now().format("%d-%m-%Y"));
-
-  octocrab
-        .issues(&owner, &repo)
-        .create(&tag)
-        .body("This is an autogenerated issue..")
-        .attach()
-        .send()
-        .await?;
-} */
-
-pub async fn upload_airtable(login: &str, email: &str, twitter_username: &str, watching: bool) {
-    let airtable_token_name = env::var("airtable_token_name").unwrap_or("github".to_string());
-    let airtable_base_id = env::var("airtable_base_id").unwrap_or("appmhvMGsMRPmuUWJ".to_string());
-    let airtable_table_name = env::var("airtable_table_name").unwrap_or("mention".to_string());
-
-    let data = serde_json::json!({
-        "Name": login,
-        "Email": email,
-        "Twitter": twitter_username,
-        "Watching": watching,
-    });
-    let _ = create_record(
-        &airtable_token_name,
-        &airtable_base_id,
-        &airtable_table_name,
-        data.clone(),
-    );
+            Ok((email, twitter_username))
+        }
+        Err(e) => {
+            log::error!("Failed to get user info for {}: {:?}", login, e);
+            Err(e.into())
+        }
+    }
 }
