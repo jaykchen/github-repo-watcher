@@ -27,7 +27,7 @@ async fn handler(body: Vec<u8>) {
     let repo = env::var("repo").unwrap_or("wasmedge".to_string());
 
     let now = Utc::now();
-    let n_days_ago = (now - Duration::days(2)).date_naive();
+    let n_days_ago = (now - Duration::days(7)).date_naive();
 
     let mut found_logins_set = HashSet::new();
 
@@ -124,7 +124,7 @@ async fn track_forks(
     let mut count_out_of_range = 0;
 
     'outer: for _n in 1..100 {
-        log::info!("fork loop {}", _n);
+        // log::info!("fork loop {}", _n);
 
         let query = format!(
             r#"
@@ -155,7 +155,6 @@ async fn track_forks(
                 .as_ref()
                 .map_or("null".to_string(), |cursor| format!(r#""{}""#, cursor))
         );
-        log::info!("query {}", query);
 
         let response: GraphQLResponse = octocrab.graphql(&query).await?;
         let repository = response
@@ -181,7 +180,7 @@ async fn track_forks(
                                 continue;
                             }
                             let (email, twitter) = get_user_data(&login).await?;
-                            // log::info!("{} {} {}", &login, email, twitter);
+
                             let is_watching = match watchers_set.contains(&login) {
                                 true => "yes".to_string(),
                                 false => "".to_string(),
@@ -268,7 +267,7 @@ async fn track_stargazers(
     let mut count_out_of_range = 0;
 
     'outer: for _n in 1..100 {
-        log::info!("stargazers loop {}", _n);
+        // log::info!("stargazers loop {}", _n);
 
         let query_str = format!(
             r#"query {{
@@ -294,8 +293,6 @@ async fn track_stargazers(
                 .as_ref()
                 .map_or("null".to_string(), |cursor| format!(r#""{}""#, cursor))
         );
-
-        log::info!("{}", query_str);
 
         let response: GraphQLResponse = octocrab.graphql(&query_str).await?;
         let stargazers = response
@@ -462,12 +459,9 @@ async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>
 
 pub async fn upload_to_gist(wtr: csv::Writer<Vec<u8>>) -> anyhow::Result<()> {
     let octocrab = get_octo(&GithubLogin::Default);
-  
+
     let data = wtr.into_inner()?;
     let formatted_answer = String::from_utf8(data)?;
-
-    let check = formatted_answer.chars().take(100).collect::<String>();
-    log::info!("before uploading to gist, csv: {}", check);
 
     let filename = format!("report_{}.csv", Utc::now().format("%d-%m-%Y"));
 
