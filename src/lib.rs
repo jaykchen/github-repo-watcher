@@ -1,9 +1,14 @@
 use airtable_flows::create_record;
 use anyhow;
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Timelike, Utc};
+use csv::{QuoteStyle, WriterBuilder};
 use dotenv::dotenv;
 use flowsnet_platform_sdk::logger;
-use github_flows::{get_octo, GithubLogin};
+use github_flows::{
+    get_octo,
+    octocrab::{models::gists::Gist, Octocrab},
+    GithubLogin,
+};
 use schedule_flows::{schedule_cron_job, schedule_handler};
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -16,13 +21,7 @@ pub async fn on_deploy() {
 
     let now = Utc::now();
     let now_minute = now.minute() + 1;
-    let cron_time = format!(
-        "{:02} {:02} {:02} {:02} *",
-        now_minute,
-        now.hour(),
-        now.day(),
-        now.month(),
-    );
+    let cron_time = format!("{:02} {:02} {:02} * *", now_minute, now.hour(), now.day(),);
     schedule_cron_job(cron_time, String::from("cron_job_evoked")).await;
 }
 
@@ -33,34 +32,43 @@ async fn handler(body: Vec<u8>) {
     let owner = env::var("owner").unwrap_or("wasmedge".to_string());
     let repo = env::var("repo").unwrap_or("wasmedge".to_string());
 
+    let private_owner = env::var("private_owner").unwrap_or("jaykchen".to_string());
+    let private_repo = env::var("private_repo").unwrap_or("telegram-demo".to_string());
+
     let now = Utc::now();
-    let n_days_ago = (now - Duration::days(7)).date_naive();
+    let n_days_ago = (now - Duration::days(1)).date_naive();
 
     let mut found_logins_set = HashSet::new();
+
+    let mut wtr = WriterBuilder::new()
+        .delimiter(b',')
+        .quote_style(QuoteStyle::Always)
+        .from_writer(vec![]);
+
+    wtr.write_record(&["Name", "Email", "Twitter", "Watching"])
+        .expect("Failed to write record");
     if let Ok(watchers) = get_watchers(&owner, &repo).await {
-        let _ = track_forks(&owner, &repo, &watchers, &mut found_logins_set, &n_days_ago).await;
-        let _ =
-            track_stargazers(&owner, &repo, &watchers, &mut found_logins_set, &n_days_ago).await;
+        let _ = track_forks(
+            &owner,
+            &repo,
+            &watchers,
+            &mut found_logins_set,
+            &n_days_ago,
+            &mut wtr,
+        )
+        .await;
+        let _ = track_stargazers(
+            &owner,
+            &repo,
+            &watchers,
+            &mut found_logins_set,
+            &n_days_ago,
+            &mut wtr,
+        )
+        .await;
     }
-}
 
-pub async fn upload_airtable(login: &str, email: &str, twitter_username: &str, watching: bool) {
-    let airtable_token_name = env::var("airtable_token_name").unwrap_or("github".to_string());
-    let airtable_base_id = env::var("airtable_base_id").unwrap_or("appmhvMGsMRPmuUWJ".to_string());
-    let airtable_table_name = env::var("airtable_table_name").unwrap_or("mention".to_string());
-
-    let data = serde_json::json!({
-        "Name": login,
-        "Email": email,
-        "Twitter": twitter_username,
-        "Watching": watching,
-    });
-    let _ = create_record(
-        &airtable_token_name,
-        &airtable_base_id,
-        &airtable_table_name,
-        data.clone(),
-    );
+    let _ = upload_to_gist(&private_owner, &private_repo, wtr).await;
 }
 
 async fn track_forks(
@@ -69,6 +77,7 @@ async fn track_forks(
     watchers_set: &HashSet<String>,
     found_set: &mut HashSet<String>,
     date: &NaiveDate,
+    wtr: &mut csv::Writer<Vec<u8>>,
 ) -> anyhow::Result<()> {
     #[derive(Serialize, Deserialize, Debug)]
     struct GraphQLResponse {
@@ -182,8 +191,10 @@ async fn track_forks(
                             }
                             let (email, twitter) = get_user_data(&login).await?;
                             // log::info!("{} {} {}", &login, email, twitter);
-                            let is_watching = watchers_set.contains(&login);
-                            upload_airtable(&login, &email, &twitter, is_watching).await;
+                            let is_watching = watchers_set.contains(&login).to_string();
+                            // upload_airtable(&login, &email, &twitter, is_watching).await;
+                            wtr.write_record(&[login, email, twitter, is_watching])
+                                .expect("Failed to write record");
                         } else {
                             count_out_of_range += 1;
                         }
@@ -214,6 +225,7 @@ async fn track_stargazers(
     watchers_set: &HashSet<String>,
     found_set: &mut HashSet<String>,
     date: &NaiveDate,
+    wtr: &mut csv::Writer<Vec<u8>>,
 ) -> anyhow::Result<()> {
     #[derive(Serialize, Deserialize, Debug)]
     struct GraphQLResponse {
@@ -315,8 +327,10 @@ async fn track_stargazers(
                                         continue;
                                     }
                                     let (email, twitter) = get_user_data(&login).await?;
-                                    let is_watching = watchers_set.contains(&login);
-                                    upload_airtable(&login, &email, &twitter, is_watching).await;
+                                    let is_watching = watchers_set.contains(&login).to_string();
+                                    // upload_airtable(&login, &email, &twitter, is_watching).await;
+                                    wtr.write_record(&[login, email, twitter, is_watching])
+                                        .expect("Failed to write record");
                                 } else {
                                     count_out_of_range += 1;
                                 }
@@ -481,213 +495,67 @@ async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>
     }
 }
 
-/* pub async fn get_contributors(owner: &str, repo: &str) -> Result<Vec<String>, octocrab::Error> {
-    use serde::{Deserialize, Serialize};
+pub async fn upload_to_gist(
+    owner: &str,
+    repo: &str,
+    wtr: csv::Writer<Vec<u8>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let octocrab = get_octo(&GithubLogin::Default);
+    let data = wtr
+        .into_inner()
+        .map_err(|err| format!("Failed to finalize CSV writing: {}", err))?;
 
-    #[derive(Serialize, Deserialize, Debug)]
-    struct GraphQLResponse {
-        data: Option<OrganizationData>,
-    }
+    let formatted_answer = String::from_utf8(data).expect("Failed to convert to String");
 
-    #[derive(Serialize, Deserialize, Debug)]
-    struct OrganizationData {
-        organization: Option<Organization>,
-    }
+    let check = formatted_answer.chars().take(100).collect::<String>();
+    log::info!("before uploading to gist, csv: {}", check);
+    
+    let filename = format!("report_{}.csv", Utc::now().format("%d-%m-%Y"));
 
-    #[derive(Serialize, Deserialize, Debug)]
-    struct Organization {
-        repository: Option<Repository>,
-    }
+    let gist: Gist = octocrab
+        .gists()
+        .create()
+        .description("Daily Tracking Report")
+        .public(false) // set to true if you want the gist to be public
+        .file(filename, formatted_answer)
+        .send()
+        .await?;
 
-    #[derive(Serialize, Deserialize, Debug)]
-    struct Repository {
-        id: String,
-        name: String,
-        url: String,
-        default_branch_ref: Option<BranchRef>,
-    }
+    Ok(())
+}
 
-    #[derive(Serialize, Deserialize, Debug)]
-    struct BranchRef {
-        name: String,
-        target: Option<Commit>,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct Commit {
-        id: String,
-        history: Option<CommitHistory>,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct CommitHistory {
-        page_info: Option<PageInfo>,
-        edges: Option<Vec<CommitEdge>>,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct PageInfo {
-        #[serde(rename = "endCursor")]
-        end_cursor: Option<String>,
-        #[serde(rename = "hasNextPage")]
-        has_next_page: bool,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct CommitEdge {
-        node: Option<CommitNode>,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct CommitNode {
-        author: Option<Author>,
-        committer: Option<Committer>,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct Author {
-        user: Option<GitHubUser>,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct Committer {
-        user: Option<GitHubUser>,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct GitHubUser {
-        login: String,
-        name: Option<String>,
-    }
-
-    let mut contributors = Vec::new();
+/* pub async fn attach_to_issue(owner: &str, repo: &str, wtr: &mut csv::Writer<Vec<u8>>) {
     let octocrab = get_octo(&GithubLogin::Default);
 
-    // <https://api.github.com/repositories/224908244/contributors?per_page=2&page=2>; rel="next", <https://api.github.com/repositories/224908244/contributors?per_page=2&page=79>; rel="last"
+    let data = wtr.into_inner().expect("Failed to finalize CSV writing");
+    let formatted_answer = String::from_utf8(data).expect("Failed to convert to String");
 
-    let mut after_cursor = None;
+    let tag = format!("Daily Tracking Report - {}", Utc::now().format("%d-%m-%Y"));
 
-    for _n in 1..50 {
-        log::info!("contributors loop {}", _n);
-
-        let query = format!(
-            r#"
-            query {{
-                (organization(login: "{}") {{
-                repository(name: "{}") {{
-                    id
-                    name
-                    url
-                    defaultBranchRef {{
-                        name
-                        target {{
-                            ... on Commit {{
-                                id
-                                history(first: 100, since: "{}", after: {}) {{
-                                    pageInfo {{
-                                        hasNextPage
-                                        endCursor
-                                    }}
-                                    edges {{
-                                        node {{
-                                            author {{
-                                                user {{
-                                                    login
-                                                    name
-                                                }}
-                                            }}
-                                            committer {{
-                                                user {{
-                                                    login
-                                                    name
-                                                }}
-                                            }}
-                                        }}
-                                    }}
-                                }}
-                            }}
-                        }}
-                    }}
-                }}
-            }}
-        "#,
-            owner,
-            repo,
-            since,
-            after_cursor
-                .as_ref()
-                .map_or("null".to_string(), |c| format!(r#""{}""#, c))
-        );
-
-        let response: GraphQLResponse = octocrab.graphql(&query).await?;
-        let history = response
-            .data
-            .and_then(|data| data.organization)
-            .and_then(|organization| organization.repository)
-            .and_then(|repo| repo.default_branch_ref)
-            .and_then(|default_branch_ref| default_branch_ref.target)
-            .and_then(|target| target.history);
-
-        if let Some(history) = history {
-            for edge in history.edges.unwrap_or_default() {
-                if let Some(node) = edge.node {
-                    if let Some(author) = node.author {
-                        if let Some(user) = author.user {
-                            contributors_set.insert(user.login);
-                        }
-                    }
-                }
-            }
-
-            match history.page_info {
-                Some(page_info) if page_info.has_next_page => {
-                    after_cursor = page_info.end_cursor;
-                }
-                _ => break,
-            }
-        } else {
-            break;
-        }
-    }
-
-    Ok(contributors_set.into_iter().collect())
+  octocrab
+        .issues(&owner, &repo)
+        .create(&tag)
+        .body("This is an autogenerated issue..")
+        .attach()
+        .send()
+        .await?;
 } */
-/* query ($org: String!, $repoName: String!, $since: GitTimestamp!, $afterCursor: String) {
-  organization(login: $org) {
-    repository(name: $repoName) {
-      id
-      name
-      url
-      defaultBranchRef {
-        name
-        target {
-          ... on Commit {
-            id
-            history(first: 100, since: $since, after: $afterCursor) {
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-              edges {
-                node {
-                  author {
-                    user {
-                      login
-                      name
-                    }
-                  }
-                  committer {
-                    user {
-                      login
-                      name
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-} */
+
+pub async fn upload_airtable(login: &str, email: &str, twitter_username: &str, watching: bool) {
+    let airtable_token_name = env::var("airtable_token_name").unwrap_or("github".to_string());
+    let airtable_base_id = env::var("airtable_base_id").unwrap_or("appmhvMGsMRPmuUWJ".to_string());
+    let airtable_table_name = env::var("airtable_table_name").unwrap_or("mention".to_string());
+
+    let data = serde_json::json!({
+        "Name": login,
+        "Email": email,
+        "Twitter": twitter_username,
+        "Watching": watching,
+    });
+    let _ = create_record(
+        &airtable_token_name,
+        &airtable_base_id,
+        &airtable_table_name,
+        data.clone(),
+    );
+}
