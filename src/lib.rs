@@ -33,11 +33,11 @@ async fn handler(body: Vec<u8>) {
 
     wtr.write_record(&["Name", "Email", "Twitter", "Watching"])
         .expect("Failed to write record");
-
-    if let Ok(found_watchers_map) = get_watchers(&owner, &repo).await {
-        let _ = track_forks(&owner, &repo, &found_watchers_map, &mut wtr).await;
-        let _ = track_stargazers(&owner, &repo, &found_watchers_map, &mut wtr).await;
-    }
+    let found_watchers_map = HashMap::<String, (String, String)>::new();
+    // if let Ok(found_watchers_map) = get_watchers(&owner, &repo).await {
+    let _ = track_forks(&owner, &repo, &found_watchers_map, &mut wtr).await;
+    //     let _ = track_stargazers(&owner, &repo, &found_watchers_map, &mut wtr).await;
+    // }
 
     let _ = upload_to_gist(wtr).await;
 }
@@ -101,7 +101,7 @@ async fn track_forks(
     let octocrab = get_octo(&GithubLogin::Default);
 
     'outer: for _n in 1..99 {
-        // log::info!("fork loop {}", _n);
+        log::info!("fork loop {}", _n);
 
         let query = format!(
             r#"
@@ -149,23 +149,27 @@ async fn track_forks(
                         let login = owner.login.unwrap_or_default();
 
                         match found_map.get(&login) {
-                            Some((email, twitter)) => wtr
-                                .write_record(&[
+                            Some((email, twitter)) => {
+                                if let Err(err) = wtr.write_record(&[
                                     login,
                                     email.to_string(),
                                     twitter.to_string(),
-                                    String::from("Yes"),
-                                ])
-                                .expect("Failed to write record"),
+                                    "Yes".to_string(),
+                                ]) {
+                                    log::error!("Failed to write record: {:?}", err);
+                                }
+                            }
 
-                            None => wtr
-                                .write_record(&[
+                            None => {
+                                if let Err(err) = wtr.write_record(&[
                                     login,
                                     owner.email.unwrap_or("".to_string()),
                                     owner.twitterUsername.unwrap_or("".to_string()),
                                     "".to_string(),
-                                ])
-                                .expect("Failed to write record"),
+                                ]) {
+                                    log::error!("Failed to write record: {:?}", err);
+                                }
+                            }
                         }
                     }
                 }
