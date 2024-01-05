@@ -394,10 +394,8 @@ async fn get_watchers(
                             node {{
                                 login
                                 url
-                                ... on User {{
-                                    email
-                                    twitterUsername
-                                }}
+                                email
+                                twitterUsername
                             }}
                         }}
                         pageInfo {{
@@ -424,10 +422,14 @@ async fn get_watchers(
         if let Some(watchers) = watchers {
             for edge in watchers.edges.unwrap_or_default() {
                 if let Some(node) = edge.node {
-                    let email = node.email.unwrap_or("".to_string());
-                    let twitter = node.twitterUsername.unwrap_or("".to_string());
-
-                    watchers_map.insert(node.login, (email, twitter, "yes".to_string()));
+                    watchers_map.insert(
+                        node.login,
+                        (
+                            node.email.unwrap_or_default(),
+                            node.twitterUsername.unwrap_or_default(),
+                            String::from("Yes"),
+                        ),
+                    );
                 }
             }
 
@@ -442,6 +444,7 @@ async fn get_watchers(
         }
     }
     if !watchers_map.is_empty() {
+        log::info!("Found {} watchers for {}", watchers_map.len(), repo);
         Ok(watchers_map)
     } else {
         Err(anyhow::anyhow!("no watchers"))
