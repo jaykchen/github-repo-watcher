@@ -1,5 +1,5 @@
 use anyhow;
-use chrono::{DateTime, Datelike, Duration, NaiveDate, Timelike, Utc};
+use chrono::{Datelike, Timelike, Utc};
 use csv::{QuoteStyle, WriterBuilder};
 use dotenv::dotenv;
 use flowsnet_platform_sdk::logger;
@@ -26,9 +26,6 @@ async fn handler(body: Vec<u8>) {
     let owner = env::var("owner").unwrap_or("wasmedge".to_string());
     let repo = env::var("repo").unwrap_or("wasmedge".to_string());
 
-    let now = Utc::now();
-    let n_days_ago = (now - Duration::days(7)).date_naive();
-
     let mut found_logins_set = HashSet::new();
 
     let mut wtr = WriterBuilder::new()
@@ -39,24 +36,8 @@ async fn handler(body: Vec<u8>) {
     wtr.write_record(&["Name", "Email", "Twitter", "Watching"])
         .expect("Failed to write record");
     if let Ok(watchers) = get_watchers(&owner, &repo).await {
-        let _ = track_forks(
-            &owner,
-            &repo,
-            &watchers,
-            &mut found_logins_set,
-            &n_days_ago,
-            &mut wtr,
-        )
-        .await;
-        let _ = track_stargazers(
-            &owner,
-            &repo,
-            &watchers,
-            &mut found_logins_set,
-            &n_days_ago,
-            &mut wtr,
-        )
-        .await;
+        let _ = track_forks(&owner, &repo, &watchers, &mut found_logins_set, &mut wtr).await;
+        let _ = track_stargazers(&owner, &repo, &watchers, &mut found_logins_set, &mut wtr).await;
     }
 
     let _ = upload_to_gist(wtr).await;
@@ -67,7 +48,6 @@ async fn track_forks(
     repo: &str,
     watchers_set: &HashSet<String>,
     found_set: &mut HashSet<String>,
-    date: &NaiveDate,
     wtr: &mut csv::Writer<Vec<u8>>,
 ) -> anyhow::Result<()> {
     #[derive(Serialize, Deserialize, Debug)]
@@ -121,7 +101,6 @@ async fn track_forks(
 
     let mut after_cursor: Option<String> = None;
     let octocrab = get_octo(&GithubLogin::Default);
-    let mut count_out_of_range = 0;
 
     'outer: for _n in 1..100 {
         // log::info!("fork loop {}", _n);
@@ -165,31 +144,18 @@ async fn track_forks(
         if let Some(forks) = repository {
             for edge in forks.edges.unwrap_or_default() {
                 if let Some(node) = edge.node {
-                    if let (Some(login), Some(created_at_str)) =
-                        (node.owner.and_then(|o| o.login), node.created_at)
-                    {
-                        let fork_created_at = DateTime::parse_from_rfc3339(&created_at_str)?;
-                        let fork_date = fork_created_at.naive_utc().date();
-
-                        if count_out_of_range > 10 {
-                            break 'outer;
+                    if let Some(login) = node.owner.and_then(|o| o.login) {
+                        if !found_set.insert(login.clone()) {
+                            continue;
                         }
+                        let (email, twitter) = get_user_data(&login).await?;
 
-                        if fork_date >= *date {
-                            if !found_set.insert(login.clone()) {
-                                continue;
-                            }
-                            let (email, twitter) = get_user_data(&login).await?;
-
-                            let is_watching = match watchers_set.contains(&login) {
-                                true => "yes".to_string(),
-                                false => "".to_string(),
-                            };
-                            wtr.write_record(&[login, email, twitter, is_watching])
-                                .expect("Failed to write record");
-                        } else {
-                            count_out_of_range += 1;
-                        }
+                        let is_watching = match watchers_set.contains(&login) {
+                            true => "yes".to_string(),
+                            false => "".to_string(),
+                        };
+                        wtr.write_record(&[login, email, twitter, is_watching])
+                            .expect("Failed to write record");
                     }
                 }
             }
@@ -216,7 +182,6 @@ async fn track_stargazers(
     repo: &str,
     watchers_set: &HashSet<String>,
     found_set: &mut HashSet<String>,
-    date: &NaiveDate,
     wtr: &mut csv::Writer<Vec<u8>>,
 ) -> anyhow::Result<()> {
     #[derive(Serialize, Deserialize, Debug)]
@@ -264,7 +229,6 @@ async fn track_stargazers(
 
     let mut after_cursor: Option<String> = None;
     let octocrab = get_octo(&GithubLogin::Default);
-    let mut count_out_of_range = 0;
 
     'outer: for _n in 1..100 {
         // log::info!("stargazers loop {}", _n);
@@ -303,32 +267,17 @@ async fn track_stargazers(
         if let Some(stargazers) = stargazers {
             for edge in stargazers.edges.unwrap_or_default() {
                 if let Some(node) = edge.node {
-                    if let (Some(login), Some(starred_at_str)) = (node.login, edge.starred_at) {
-                        match DateTime::parse_from_rfc3339(&starred_at_str) {
-                            Ok(stargazer_starred_at) => {
-                                let stargazer_date = stargazer_starred_at.naive_utc().date();
-
-                                if count_out_of_range > 10 {
-                                    break 'outer;
-                                }
-
-                                if stargazer_date >= *date {
-                                    if !found_set.insert(login.clone()) {
-                                        continue;
-                                    }
-                                    let (email, twitter) = get_user_data(&login).await?;
-                                    let is_watching = match watchers_set.contains(&login) {
-                                        true => "yes".to_string(),
-                                        false => "".to_string(),
-                                    };
-                                    wtr.write_record(&[login, email, twitter, is_watching])
-                                        .expect("Failed to write record");
-                                } else {
-                                    count_out_of_range += 1;
-                                }
-                            }
-                            Err(e) => log::error!("Failed to parse star date: {}", e),
+                    if let Some(login) = node.login {
+                        if !found_set.insert(login.clone()) {
+                            continue;
                         }
+                        let (email, twitter) = get_user_data(&login).await?;
+                        let is_watching = match watchers_set.contains(&login) {
+                            true => "yes".to_string(),
+                            false => "".to_string(),
+                        };
+                        wtr.write_record(&[login, email, twitter, is_watching])
+                            .expect("Failed to write record");
                     }
                 }
             }
