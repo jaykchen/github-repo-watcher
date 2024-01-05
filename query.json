@@ -1,4 +1,4 @@
-forks(first: {}, orderBy: {field: CREATED_AT, direction: DESC
+forks(first: 100, after: {}, orderBy: {field: CREATED_AT, direction: DESC
 }) {
     edges {
         node {
@@ -6,11 +6,17 @@ forks(first: {}, orderBy: {field: CREATED_AT, direction: DESC
             name
             owner {
                 login
+                email
+                twitterUsername
             }
-            createdAt
         }
     }
+    pageInfo {
+        endCursor
+        hasNextPage
+    }
 }
+
 
 query($owner: String!, $repo: String!) {
     repository(owner: $owner, name: $repo) {

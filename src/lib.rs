@@ -45,7 +45,7 @@ async fn handler(body: Vec<u8>) {
 async fn track_forks(
     owner: &str,
     repo: &str,
-    found_map: &HashMap<String, (String, String, String)>,
+    found_map: &HashMap<String, (String, String)>,
     wtr: &mut csv::Writer<Vec<u8>>,
 ) -> anyhow::Result<()> {
     #[derive(Serialize, Deserialize, Debug)]
@@ -73,13 +73,13 @@ async fn track_forks(
         id: Option<String>,
         name: Option<String>,
         owner: Option<Owner>,
-        email: Option<String>,
-        twitterUsername: Option<String>,
     }
 
     #[derive(Serialize, Deserialize, Debug)]
     struct Owner {
         login: Option<String>,
+        email: Option<String>,
+        twitterUsername: Option<String>,
     }
 
     #[derive(Serialize, Deserialize, Debug)]
@@ -100,7 +100,7 @@ async fn track_forks(
     let mut after_cursor: Option<String> = None;
     let octocrab = get_octo(&GithubLogin::Default);
 
-    'outer: for _n in 1..100 {
+    'outer: for _n in 1..99 {
         // log::info!("fork loop {}", _n);
 
         let query = format!(
@@ -114,11 +114,11 @@ async fn track_forks(
                                 name
                                 owner {{
                                     login
-                                        ... on User {{
-                                            email
-                                            twitterUsername
-                                        }}
+                                    ... on User {{
+                                        email
+                                        twitterUsername
                                     }}
+                                }}
                             }}
                         }}
                         pageInfo {{
@@ -145,29 +145,27 @@ async fn track_forks(
         if let Some(forks) = repository {
             for edge in forks.edges.unwrap_or_default() {
                 if let Some(node) = edge.node {
-                    if let Some(login) = node.owner.and_then(|o| o.login) {
+                    if let Some(owner) = node.owner {
+                        let login = owner.login.unwrap_or_default();
+
                         match found_map.get(&login) {
-                            Some((email, twitter, is_watching)) => wtr
+                            Some((email, twitter)) => wtr
                                 .write_record(&[
                                     login,
                                     email.to_string(),
                                     twitter.to_string(),
-                                    is_watching.to_string(),
+                                    String::from("Yes"),
                                 ])
                                 .expect("Failed to write record"),
 
-                            None => {
-                                let email = node.email.unwrap_or("".to_string());
-                                let twitter = node.twitterUsername.unwrap_or("".to_string());
-
-                                wtr.write_record(&[
+                            None => wtr
+                                .write_record(&[
                                     login,
-                                    email.to_string(),
-                                    twitter.to_string(),
+                                    owner.email.unwrap_or("".to_string()),
+                                    owner.twitterUsername.unwrap_or("".to_string()),
                                     "".to_string(),
                                 ])
-                                .expect("Failed to write record");
-                            }
+                                .expect("Failed to write record"),
                         }
                     }
                 }
@@ -193,7 +191,7 @@ async fn track_forks(
 async fn track_stargazers(
     owner: &str,
     repo: &str,
-    found_map: &HashMap<String, (String, String, String)>,
+    found_map: &HashMap<String, (String, String)>,
     wtr: &mut csv::Writer<Vec<u8>>,
 ) -> anyhow::Result<()> {
     #[derive(Serialize, Deserialize, Debug)]
@@ -244,7 +242,7 @@ async fn track_stargazers(
     let mut after_cursor: Option<String> = None;
     let octocrab = get_octo(&GithubLogin::Default);
 
-    'outer: for _n in 1..100 {
+    'outer: for _n in 1..99 {
         // log::info!("stargazers loop {}", _n);
 
         let query_str = format!(
@@ -255,11 +253,8 @@ async fn track_stargazers(
                             node {{
                                 id
                                 login
-                                ... on User {{
-                                    email
-                                    twitterUsername
-                                }}
-
+                                email
+                                twitterUsername
                             }}
                         }}
                         pageInfo {{
@@ -287,27 +282,23 @@ async fn track_stargazers(
                 if let Some(node) = edge.node {
                     if let Some(login) = node.login {
                         match found_map.get(&login) {
-                            Some((email, twitter, is_watching)) => wtr
+                            Some((email, twitter)) => wtr
                                 .write_record(&[
                                     login,
                                     email.to_string(),
                                     twitter.to_string(),
-                                    is_watching.to_string(),
+                                    String::from("Yes"),
                                 ])
                                 .expect("Failed to write record"),
 
-                            None => {
-                                let email = node.email.unwrap_or("".to_string());
-                                let twitter = node.twitterUsername.unwrap_or("".to_string());
-
-                                wtr.write_record(&[
+                            None => wtr
+                                .write_record(&[
                                     login,
-                                    email.to_string(),
-                                    twitter.to_string(),
+                                    node.email.unwrap_or("".to_string()),
+                                    node.twitterUsername.unwrap_or("".to_string()),
                                     "".to_string(),
                                 ])
-                                .expect("Failed to write record");
-                            }
+                                .expect("Failed to write record"),
                         }
                     }
                 }
@@ -334,7 +325,7 @@ async fn track_stargazers(
 async fn get_watchers(
     owner: &str,
     repo: &str,
-) -> anyhow::Result<HashMap<String, (String, String, String)>> {
+) -> anyhow::Result<HashMap<String, (String, String)>> {
     #[derive(Serialize, Deserialize, Debug)]
     struct GraphQLResponse {
         data: Option<RepositoryData>,
@@ -377,7 +368,7 @@ async fn get_watchers(
         page_info: Option<PageInfo>,
     }
 
-    let mut watchers_map = HashMap::<String, (String, String, String)>::new();
+    let mut watchers_map = HashMap::<String, (String, String)>::new();
 
     let octocrab = get_octo(&GithubLogin::Default);
     let mut after_cursor = None;
@@ -427,7 +418,6 @@ async fn get_watchers(
                         (
                             node.email.unwrap_or_default(),
                             node.twitterUsername.unwrap_or_default(),
-                            String::from("Yes"),
                         ),
                     );
                 }
