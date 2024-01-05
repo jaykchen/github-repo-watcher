@@ -216,8 +216,6 @@ async fn track_stargazers(
     #[derive(Serialize, Deserialize, Debug)]
     struct StargazerEdge {
         node: Option<StargazerNode>,
-        #[serde(rename = "starredAt")]
-        starred_at: Option<String>,
     }
 
     #[derive(Serialize, Deserialize, Debug)]
@@ -284,28 +282,28 @@ async fn track_stargazers(
         if let Some(stargazers) = stargazers {
             for edge in stargazers.edges.unwrap_or_default() {
                 if let Some(node) = edge.node {
-                    if let Some(login) = node.login {
-                        match found_map.get(&login) {
-                            Some((email, twitter)) => {
-                                if let Err(err) = wtr.write_record(&[
-                                    login,
-                                    email.to_string(),
-                                    twitter.to_string(),
-                                    "Yes".to_string(),
-                                ]) {
-                                    log::error!("Failed to write record: {:?}", err);
-                                }
-                            }
+                    let login = node.login.unwrap_or_default();
 
-                            None => {
-                                if let Err(err) = wtr.write_record(&[
-                                    login,
-                                    node.email.unwrap_or("".to_string()),
-                                    node.twitterUsername.unwrap_or("".to_string()),
-                                    "".to_string(),
-                                ]) {
-                                    log::error!("Failed to write record: {:?}", err);
-                                }
+                    match found_map.get(&login) {
+                        Some((email, twitter)) => {
+                            if let Err(err) = wtr.write_record(&[
+                                login,
+                                email.to_string(),
+                                twitter.to_string(),
+                                "Yes".to_string(),
+                            ]) {
+                                log::error!("Failed to write record: {:?}", err);
+                            }
+                        }
+
+                        None => {
+                            if let Err(err) = wtr.write_record(&[
+                                login,
+                                node.email.unwrap_or("".to_string()),
+                                node.twitterUsername.unwrap_or("".to_string()),
+                                "".to_string(),
+                            ]) {
+                                log::error!("Failed to write record: {:?}", err);
                             }
                         }
                     }
@@ -322,6 +320,8 @@ async fn track_stargazers(
                 log::error!("pageInfo is missing from the response");
                 break;
             }
+            // Flush the writer at the end to ensure all data is written
+            wtr.flush()?;
         } else {
             break;
         }
