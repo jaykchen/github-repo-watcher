@@ -35,8 +35,8 @@ async fn handler(body: Vec<u8>) {
         .expect("Failed to write record");
     let found_watchers_map = HashMap::<String, (String, String)>::new();
     // if let Ok(found_watchers_map) = get_watchers(&owner, &repo).await {
-    let _ = track_forks(&owner, &repo, &found_watchers_map, &mut wtr).await;
-    //     let _ = track_stargazers(&owner, &repo, &found_watchers_map, &mut wtr).await;
+    // let _ = track_forks(&owner, &repo, &found_watchers_map, &mut wtr).await;
+    let _ = track_stargazers(&owner, &repo, &found_watchers_map, &mut wtr).await;
     // }
 
     let _ = upload_to_gist(wtr).await;
@@ -286,23 +286,27 @@ async fn track_stargazers(
                 if let Some(node) = edge.node {
                     if let Some(login) = node.login {
                         match found_map.get(&login) {
-                            Some((email, twitter)) => wtr
-                                .write_record(&[
+                            Some((email, twitter)) => {
+                                if let Err(err) = wtr.write_record(&[
                                     login,
                                     email.to_string(),
                                     twitter.to_string(),
-                                    String::from("Yes"),
-                                ])
-                                .expect("Failed to write record"),
+                                    "Yes".to_string(),
+                                ]) {
+                                    log::error!("Failed to write record: {:?}", err);
+                                }
+                            }
 
-                            None => wtr
-                                .write_record(&[
+                            None => {
+                                if let Err(err) = wtr.write_record(&[
                                     login,
                                     node.email.unwrap_or("".to_string()),
                                     node.twitterUsername.unwrap_or("".to_string()),
                                     "".to_string(),
-                                ])
-                                .expect("Failed to write record"),
+                                ]) {
+                                    log::error!("Failed to write record: {:?}", err);
+                                }
+                            }
                         }
                     }
                 }
