@@ -33,11 +33,11 @@ async fn handler(body: Vec<u8>) {
 
     wtr.write_record(&["Name", "Email", "Twitter", "Watching"])
         .expect("Failed to write record");
-    let found_watchers_map = HashMap::<String, (String, String)>::new();
-    // if let Ok(found_watchers_map) = get_watchers(&owner, &repo).await {
-    // let _ = track_forks(&owner, &repo, &found_watchers_map, &mut wtr).await;
-    let _ = track_stargazers(&owner, &repo, &found_watchers_map, &mut wtr).await;
-    // }
+
+    if let Ok(found_watchers_map) = get_watchers(&owner, &repo).await {
+        let _ = track_forks(&owner, &repo, &found_watchers_map, &mut wtr).await;
+        let _ = track_stargazers(&owner, &repo, &found_watchers_map, &mut wtr).await;
+    }
 
     let _ = upload_to_gist(wtr).await;
 }
@@ -101,13 +101,13 @@ async fn track_forks(
     let octocrab = get_octo(&GithubLogin::Default);
 
     'outer: for _n in 1..99 {
-        log::info!("fork loop {}", _n);
+        // log::info!("fork loop {}", _n);
 
         let query = format!(
             r#"
             query {{
                 repository(owner: "{}", name: "{}") {{
-                    forks(first: 100, after: {}, orderBy: {{field: CREATED_AT, direction: DESC}}) {{
+                    forks(first: 100, after: {}) {{
                         edges {{
                             node {{
                                 id
@@ -174,6 +174,7 @@ async fn track_forks(
                     }
                 }
             }
+            wtr.flush()?;
 
             if let Some(page_info) = forks.page_info {
                 if page_info.has_next_page.unwrap_or(false) {
@@ -245,7 +246,7 @@ async fn track_stargazers(
     let octocrab = get_octo(&GithubLogin::Default);
 
     'outer: for _n in 1..99 {
-        log::info!("stargazers loop {}", _n);
+        // log::info!("stargazers loop {}", _n);
 
         let query_str = format!(
             r#"query {{
@@ -309,6 +310,7 @@ async fn track_stargazers(
                     }
                 }
             }
+            wtr.flush()?;
 
             if let Some(page_info) = stargazers.page_info {
                 if page_info.has_next_page.unwrap_or(false) {
@@ -320,8 +322,6 @@ async fn track_stargazers(
                 log::error!("pageInfo is missing from the response");
                 break;
             }
-            // Flush the writer at the end to ensure all data is written
-            wtr.flush()?;
         } else {
             break;
         }
