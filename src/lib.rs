@@ -6,7 +6,7 @@ use flowsnet_platform_sdk::logger;
 use github_flows::{get_octo, GithubLogin};
 use schedule_flows::{schedule_cron_job, schedule_handler};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, env};
+use std::{collections::HashMap, env};
 
 #[no_mangle]
 #[tokio::main(flavor = "current_thread")]
@@ -26,8 +26,6 @@ async fn handler(body: Vec<u8>) {
     let owner = env::var("owner").unwrap_or("wasmedge".to_string());
     let repo = env::var("repo").unwrap_or("wasmedge".to_string());
 
-    let mut found_logins_set = HashSet::new();
-
     let mut wtr = WriterBuilder::new()
         .delimiter(b',')
         .quote_style(QuoteStyle::Always)
@@ -35,9 +33,10 @@ async fn handler(body: Vec<u8>) {
 
     wtr.write_record(&["Name", "Email", "Twitter", "Watching"])
         .expect("Failed to write record");
-    if let Ok(watchers) = get_watchers(&owner, &repo).await {
-        let _ = track_forks(&owner, &repo, &watchers, &mut found_logins_set, &mut wtr).await;
-        let _ = track_stargazers(&owner, &repo, &watchers, &mut found_logins_set, &mut wtr).await;
+
+    if let Ok(found_watchers_map) = get_watchers(&owner, &repo).await {
+        let _ = track_forks(&owner, &repo, &found_watchers_map, &mut wtr).await;
+        let _ = track_stargazers(&owner, &repo, &found_watchers_map, &mut wtr).await;
     }
 
     let _ = upload_to_gist(wtr).await;
@@ -46,8 +45,7 @@ async fn handler(body: Vec<u8>) {
 async fn track_forks(
     owner: &str,
     repo: &str,
-    watchers_set: &HashSet<String>,
-    found_set: &mut HashSet<String>,
+    found_map: &HashMap<String, (String, String, String)>,
     wtr: &mut csv::Writer<Vec<u8>>,
 ) -> anyhow::Result<()> {
     #[derive(Serialize, Deserialize, Debug)]
@@ -75,8 +73,8 @@ async fn track_forks(
         id: Option<String>,
         name: Option<String>,
         owner: Option<Owner>,
-        #[serde(rename = "createdAt")]
-        created_at: Option<String>,
+        email: Option<String>,
+        twitterUsername: Option<String>,
     }
 
     #[derive(Serialize, Deserialize, Debug)]
@@ -116,8 +114,11 @@ async fn track_forks(
                                 name
                                 owner {{
                                     login
-                                }}
-                                createdAt
+                                        ... on User {{
+                                            email
+                                            twitterUsername
+                                        }}
+                                    }}
                             }}
                         }}
                         pageInfo {{
@@ -145,17 +146,29 @@ async fn track_forks(
             for edge in forks.edges.unwrap_or_default() {
                 if let Some(node) = edge.node {
                     if let Some(login) = node.owner.and_then(|o| o.login) {
-                        if !found_set.insert(login.clone()) {
-                            continue;
-                        }
-                        let (email, twitter) = get_user_data(&login).await?;
+                        match found_map.get(&login) {
+                            Some((email, twitter, is_watching)) => wtr
+                                .write_record(&[
+                                    login,
+                                    email.to_string(),
+                                    twitter.to_string(),
+                                    is_watching.to_string(),
+                                ])
+                                .expect("Failed to write record"),
 
-                        let is_watching = match watchers_set.contains(&login) {
-                            true => "yes".to_string(),
-                            false => "".to_string(),
-                        };
-                        wtr.write_record(&[login, email, twitter, is_watching])
-                            .expect("Failed to write record");
+                            None => {
+                                let email = node.email.unwrap_or("".to_string());
+                                let twitter = node.twitterUsername.unwrap_or("".to_string());
+
+                                wtr.write_record(&[
+                                    login,
+                                    email.to_string(),
+                                    twitter.to_string(),
+                                    "".to_string(),
+                                ])
+                                .expect("Failed to write record");
+                            }
+                        }
                     }
                 }
             }
@@ -180,8 +193,7 @@ async fn track_forks(
 async fn track_stargazers(
     owner: &str,
     repo: &str,
-    watchers_set: &HashSet<String>,
-    found_set: &mut HashSet<String>,
+    found_map: &HashMap<String, (String, String, String)>,
     wtr: &mut csv::Writer<Vec<u8>>,
 ) -> anyhow::Result<()> {
     #[derive(Serialize, Deserialize, Debug)]
@@ -210,6 +222,8 @@ async fn track_stargazers(
     struct StargazerNode {
         id: Option<String>,
         login: Option<String>,
+        email: Option<String>,
+        twitterUsername: Option<String>,
     }
 
     #[derive(Serialize, Deserialize, Debug)]
@@ -241,8 +255,12 @@ async fn track_stargazers(
                             node {{
                                 id
                                 login
+                                ... on User {{
+                                    email
+                                    twitterUsername
+                                }}
+
                             }}
-                            starredAt
                         }}
                         pageInfo {{
                             endCursor
@@ -268,16 +286,29 @@ async fn track_stargazers(
             for edge in stargazers.edges.unwrap_or_default() {
                 if let Some(node) = edge.node {
                     if let Some(login) = node.login {
-                        if !found_set.insert(login.clone()) {
-                            continue;
+                        match found_map.get(&login) {
+                            Some((email, twitter, is_watching)) => wtr
+                                .write_record(&[
+                                    login,
+                                    email.to_string(),
+                                    twitter.to_string(),
+                                    is_watching.to_string(),
+                                ])
+                                .expect("Failed to write record"),
+
+                            None => {
+                                let email = node.email.unwrap_or("".to_string());
+                                let twitter = node.twitterUsername.unwrap_or("".to_string());
+
+                                wtr.write_record(&[
+                                    login,
+                                    email.to_string(),
+                                    twitter.to_string(),
+                                    "".to_string(),
+                                ])
+                                .expect("Failed to write record");
+                            }
                         }
-                        let (email, twitter) = get_user_data(&login).await?;
-                        let is_watching = match watchers_set.contains(&login) {
-                            true => "yes".to_string(),
-                            false => "".to_string(),
-                        };
-                        wtr.write_record(&[login, email, twitter, is_watching])
-                            .expect("Failed to write record");
                     }
                 }
             }
@@ -300,7 +331,10 @@ async fn track_stargazers(
     Ok(())
 }
 
-async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>> {
+async fn get_watchers(
+    owner: &str,
+    repo: &str,
+) -> anyhow::Result<HashMap<String, (String, String, String)>> {
     #[derive(Serialize, Deserialize, Debug)]
     struct GraphQLResponse {
         data: Option<RepositoryData>,
@@ -324,9 +358,10 @@ async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>
     struct WatcherNode {
         login: String,
         url: String,
-        #[serde(rename = "createdAt")]
-        created_at: String,
+        email: Option<String>,
+        twitterUsername: Option<String>,
     }
+
     #[derive(Serialize, Deserialize, Debug)]
     struct PageInfo {
         #[serde(rename = "endCursor")]
@@ -342,11 +377,12 @@ async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>
         page_info: Option<PageInfo>,
     }
 
-    let mut watchers_set = HashSet::<String>::new();
+    let mut watchers_map = HashMap::<String, (String, String, String)>::new();
+
     let octocrab = get_octo(&GithubLogin::Default);
     let mut after_cursor = None;
 
-    for _n in 1..50 {
+    for _n in 1..99 {
         // log::info!("watchers loop {}", _n);
 
         let query = format!(
@@ -358,7 +394,10 @@ async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>
                             node {{
                                 login
                                 url
-                                createdAt
+                                ... on User {{
+                                    email
+                                    twitterUsername
+                                }}
                             }}
                         }}
                         pageInfo {{
@@ -385,7 +424,10 @@ async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>
         if let Some(watchers) = watchers {
             for edge in watchers.edges.unwrap_or_default() {
                 if let Some(node) = edge.node {
-                    watchers_set.insert(node.login);
+                    let email = node.email.unwrap_or("".to_string());
+                    let twitter = node.twitterUsername.unwrap_or("".to_string());
+
+                    watchers_map.insert(node.login, (email, twitter, "yes".to_string()));
                 }
             }
 
@@ -399,8 +441,8 @@ async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>
             break;
         }
     }
-    if !watchers_set.is_empty() {
-        Ok(watchers_set)
+    if !watchers_map.is_empty() {
+        Ok(watchers_map)
     } else {
         Err(anyhow::anyhow!("no watchers"))
     }
@@ -423,34 +465,4 @@ pub async fn upload_to_gist(wtr: csv::Writer<Vec<u8>>) -> anyhow::Result<()> {
         .send()
         .await;
     Ok(())
-}
-
-async fn get_user_data(login: &str) -> anyhow::Result<(String, String)> {
-    #[derive(Serialize, Deserialize, Debug)]
-    struct UserProfile {
-        login: String,
-        company: Option<String>,
-        location: Option<String>,
-        email: Option<String>,
-        twitter_username: Option<String>,
-    }
-
-    let octocrab = get_octo(&GithubLogin::Default);
-    let user_profile_url = format!("users/{}", login);
-
-    match octocrab
-        .get::<UserProfile, _, ()>(&user_profile_url, None::<&()>)
-        .await
-    {
-        Ok(profile) => {
-            let email = profile.email.unwrap_or("".to_string());
-            let twitter_username = profile.twitter_username.unwrap_or("".to_string());
-
-            Ok((email, twitter_username))
-        }
-        Err(e) => {
-            log::error!("Failed to get user info for {}: {:?}", login, e);
-            Err(e.into())
-        }
-    }
 }

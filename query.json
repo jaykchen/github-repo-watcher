@@ -12,20 +12,26 @@ forks(first: {}, orderBy: {field: CREATED_AT, direction: DESC
     }
 }
 
-query($owner: String!, $repo: String!, $first: Int!) {
+query($owner: String!, $repo: String!) {
     repository(owner: $owner, name: $repo) {
-        stargazers(first: &first, orderBy: {field: STARRED_AT, direction: DESC
+        stargazers(first: 100, orderBy: {field: STARRED_AT, direction: DESC
         }) {
             edges {
                 node {
                     id
                     login
+                    email
+                    twitterUsername
                 }
                 starredAt
             }
+            pageInfo {
+                endCursor
+                hasNextPage
+            }
         }
     }
-
+}
     stargazers(first: {}, orderBy: {field: STARRED_AT, direction: DESC
 }) {
         edges {
@@ -35,3 +41,24 @@ query($owner: String!, $repo: String!, $first: Int!) {
             }
             starredAt
         }
+
+
+
+query {
+    repository(owner: "{}", name: "{}") {
+        watchers(first: 100, after: {}) {
+            edges {
+                node {
+                    login
+                    url
+                    email
+                    twitterUsername
+                }
+            }
+            pageInfo {
+                endCursor
+                hasNextPage
+            }
+        }
+    }
+}
