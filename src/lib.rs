@@ -247,12 +247,12 @@ async fn track_stargazers(
     let octocrab = get_octo(&GithubLogin::Default);
 
     'outer: for _n in 1..99 {
-        // log::info!("stargazers loop {}", _n);
+        log::info!("stargazers loop {}", _n);
 
         let query_str = format!(
             r#"query {{
                 repository(owner: "{}", name: "{}") {{
-                    stargazers(first: 100, after: {}, orderBy: {{field: STARRED_AT, direction: DESC}}) {{
+                    stargazers(first: 100, after: {}) {{
                         edges {{
                             node {{
                                 id
