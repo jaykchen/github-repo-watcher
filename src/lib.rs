@@ -6,7 +6,6 @@ use flowsnet_platform_sdk::logger;
 use github_flows::{get_octo, GithubLogin};
 use schedule_flows::{schedule_cron_job, schedule_handler};
 use serde::{Deserialize, Serialize};
-use serde_with::{serde_as, NoneAsEmptyString};
 use std::{collections::HashSet, env};
 
 #[no_mangle]
@@ -76,12 +75,10 @@ async fn track_forks(
         owner: Option<Owner>,
     }
 
-    #[serde_as]
     #[derive(Serialize, Deserialize, Debug)]
     struct Owner {
         login: Option<String>,
-        #[serde_as(as = "NoneAsEmptyString")]
-        email: Option<String>,
+        email: String,
         twitterUsername: Option<String>,
     }
 
@@ -154,7 +151,7 @@ async fn track_forks(
                         };
                         if let Err(err) = wtr.write_record(&[
                             login,
-                            owner.email.unwrap_or("".to_string()),
+                            owner.email,
                             owner.twitterUsername.unwrap_or("".to_string()),
                             is_watching,
                         ]) {
@@ -209,13 +206,11 @@ async fn track_stargazers(
         node: Option<StargazerNode>,
     }
 
-    #[serde_as]
     #[derive(Serialize, Deserialize, Debug, Clone)]
     struct StargazerNode {
         id: Option<String>,
         login: Option<String>,
-        #[serde_as(as = "NoneAsEmptyString")]
-        email: Option<String>,
+        email: String,
         twitterUsername: Option<String>,
     }
 
@@ -278,13 +273,13 @@ async fn track_stargazers(
                         true => String::from("Yes"),
                         false => String::from(""),
                     };
-                    if node.email.is_some() {
-                        log::info!("{} has email {}", login, node.clone().email.unwrap());
+                    if !node.email.is_empty() {
+                        log::info!("{} has email {}", login, node.clone().email);
                     }
 
                     if let Err(err) = wtr.write_record(&[
                         login,
-                        node.email.unwrap_or("".to_string()),
+                        node.email,
                         node.twitterUsername.unwrap_or("".to_string()),
                         is_watching,
                     ]) {
