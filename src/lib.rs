@@ -206,7 +206,7 @@ async fn track_stargazers(
         node: Option<StargazerNode>,
     }
 
-    #[derive(Serialize, Deserialize, Debug)]
+    #[derive(Serialize, Deserialize, Debug, Clone)]
     struct StargazerNode {
         id: Option<String>,
         login: Option<String>,
@@ -268,11 +268,15 @@ async fn track_stargazers(
         if let Some(stargazers) = stargazers {
             for edge in stargazers.edges.unwrap_or_default() {
                 if let Some(node) = edge.node {
-                    let login = node.login.unwrap_or_default();
+                    let login = node.login.clone().unwrap_or_default();
                     let is_watching = match found_set.contains(&login) {
                         true => String::from("Yes"),
                         false => String::from(""),
                     };
+                    if node.email.is_some() {
+                        log::info!("{} has email {}", login, node.clone().email.unwrap());
+                    }
+
                     if let Err(err) = wtr.write_record(&[
                         login,
                         node.email.unwrap_or("".to_string()),
