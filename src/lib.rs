@@ -268,44 +268,44 @@ async fn track_stargazers(
         log::info!("stargazers: {:?}", stargazers);
 
       return  Ok(());
-        if let Some(stargazers) = stargazers {
-            for edge in stargazers.edges.unwrap_or_default() {
-                if let Some(node) = edge.node {
-                    let login = node.login.clone().unwrap_or_default();
-                    let is_watching = match found_set.contains(&login) {
-                        true => String::from("Yes"),
-                        false => String::from(""),
-                    };
-                    if !node.email.is_empty() {
-                        log::info!("{} has email {}", login, node.clone().email);
-                    }
+        // if let Some(stargazers) = stargazers {
+        //     for edge in stargazers.edges.unwrap_or_default() {
+        //         if let Some(node) = edge.node {
+        //             let login = node.login.clone().unwrap_or_default();
+        //             let is_watching = match found_set.contains(&login) {
+        //                 true => String::from("Yes"),
+        //                 false => String::from(""),
+        //             };
+        //             if !node.email.is_empty() {
+        //                 log::info!("{} has email {}", login, node.clone().email);
+        //             }
 
-                    if let Err(err) = wtr.write_record(&[
-                        login,
-                        node.email,
-                        node.twitterUsername.unwrap_or("".to_string()),
-                        is_watching,
-                    ]) {
-                        log::error!("Failed to write record: {:?}", err);
-                    }
-                }
-            }
-            wtr.flush()?;
+        //             if let Err(err) = wtr.write_record(&[
+        //                 login,
+        //                 node.email,
+        //                 node.twitterUsername.unwrap_or("".to_string()),
+        //                 is_watching,
+        //             ]) {
+        //                 log::error!("Failed to write record: {:?}", err);
+        //             }
+        //         }
+        //     }
+        //     wtr.flush()?;
 
-            if let Some(page_info) = stargazers.page_info {
-                if page_info.has_next_page.unwrap_or(false) {
-                    after_cursor = page_info.end_cursor;
-                } else {
-                    log::info!("stargazers loop {}", _n);
-                    break;
-                }
-            } else {
-                log::error!("pageInfo is missing from the response");
-                break;
-            }
-        } else {
-            break;
-        }
+        //     if let Some(page_info) = stargazers.page_info {
+        //         if page_info.has_next_page.unwrap_or(false) {
+        //             after_cursor = page_info.end_cursor;
+        //         } else {
+        //             log::info!("stargazers loop {}", _n);
+        //             break;
+        //         }
+        //     } else {
+        //         log::error!("pageInfo is missing from the response");
+        //         break;
+        //     }
+        // } else {
+        //     break;
+        // }
     }
 
     Ok(())
