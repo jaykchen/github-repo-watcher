@@ -4,6 +4,7 @@ use csv::{QuoteStyle, WriterBuilder};
 use dotenv::dotenv;
 use flowsnet_platform_sdk::logger;
 use github_flows::{get_octo, GithubLogin};
+use octocrab_wasi::models::pulls::Base;
 use schedule_flows::{schedule_cron_job, schedule_handler};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, env};
@@ -261,14 +262,18 @@ async fn track_stargazers(
                 .map_or("null".to_string(), |cursor| format!(r#""{}""#, cursor))
         );
 
-        match octocrab.graphql::<serde_json::Value>(&query_str).await {
-            Ok(response) => {
-                log::info!("GraphQL response: {}", response);
+        let token = env::var("GITHUB_TOKEN").expect("github_token is required");
+        let base_url = "https://api.github.com/graphql";
+
+        match github_http_post(&token, base_url, &query_str).await {
+            Some(response) => {
+                let text = String::from_utf8_lossy(&response);
+                log::info!("GraphQL response: {}", text);
                 // Add logic to update `after_cursor` if pagination is needed
                 // ...
             }
-            Err(e) => {
-                log::error!("Error making GraphQL request: {}", e);
+            None => {
+                log::error!("Error making GraphQL request: ");
                 break;
             }
         }
@@ -280,7 +285,7 @@ async fn track_stargazers(
 
         // log::info!("stargazers: {:?}", stargazers);
 
-      return  Ok(());
+        return Ok(());
         // if let Some(stargazers) = stargazers {
         //     for edge in stargazers.edges.unwrap_or_default() {
         //         if let Some(node) = edge.node {
@@ -452,4 +457,34 @@ pub async fn upload_to_gist(wtr: csv::Writer<Vec<u8>>) -> anyhow::Result<()> {
         .send()
         .await;
     Ok(())
+}
+
+pub async fn github_http_post(token: &str, base_url: &str, query: &str) -> Option<Vec<u8>> {
+    use http_req::{request::Method, request::Request, response, uri::Uri};
+
+    let base_url = Uri::try_from(base_url).unwrap();
+    let mut writer = Vec::new();
+
+    let query = serde_json::json!({"query": query});
+    match Request::new(&base_url)
+        .method(Method::POST)
+        .header("User-Agent", "flows-network connector")
+        .header("Content-Type", "application/json")
+        .header("Authorization", &format!("Bearer {}", token))
+        .header("Content-Length", &query.to_string().len())
+        .body(&query.to_string().into_bytes())
+        .send(&mut writer)
+    {
+        Ok(res) => {
+            if !res.status_code().is_success() {
+                log::error!("Github http error {:?}", res.status_code());
+                return None;
+            };
+            Some(writer)
+        }
+        Err(_e) => {
+            log::error!("Error getting response from Github: {:?}", _e);
+            None
+        }
+    }
 }

@@ -22,3 +22,4 @@ octocrab_wasi = { version = "0.19.1", features = ["wasi"], default-features = fa
 csv = "1.3.0"
 store-flows = "0.3.1"
 serde_with = "3.4.0"
+http_req_wasi = {version = "0.11.1", features = ["wasmedge_rustls"]}
