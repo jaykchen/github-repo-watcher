@@ -236,7 +236,7 @@ async fn track_stargazers(
         let query_str = format!(
             r#"query {{
                 repository(owner: "{}", name: "{}") {{
-                    stargazers(first: 3, after: {}) {{
+                    stargazers(first: 20, after: {}) {{
                         edges {{
                             node {{
                                 id
