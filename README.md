@@ -12,7 +12,7 @@ Set the exact time to trigger the serverless function as a cron job in this code
 schedule_cron_job(String::from("0 11 * * *"), String::from("cron_job_evoked")).await;
 ```
 
-Set the 'owner' and 'repo' environment variables on the Flows settings page.
+Set the 'owner' and 'repo', 'GITHUB_TOKEN' environment variables on the Flows settings page.
 
 
 Then, you'll get daily updates on your gist.
