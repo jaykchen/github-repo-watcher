@@ -35,7 +35,7 @@ async fn handler(body: Vec<u8>) {
         .expect("Failed to write record");
 
     if let Ok(found_watchers_set) = get_watchers(&owner, &repo).await {
-        // let _ = track_forks(&owner, &repo, &found_watchers_set, &mut wtr).await;
+        let _ = track_forks(&owner, &repo, &found_watchers_set, &mut wtr).await;
         let _ = track_stargazers(&owner, &repo, &found_watchers_set, &mut wtr).await;
     }
 
@@ -98,10 +98,9 @@ async fn track_forks(
     }
 
     let mut after_cursor: Option<String> = None;
-    let octocrab = get_octo(&GithubLogin::Default);
 
     for _n in 1..99 {
-        let query = format!(
+        let query_str = format!(
             r#"
             query {{
                 repository(owner: "{}", name: "{}") {{
@@ -134,7 +133,21 @@ async fn track_forks(
                 .map_or("null".to_string(), |cursor| format!(r#""{}""#, cursor))
         );
 
-        let response: GraphQLResponse = octocrab.graphql(&query).await?;
+        let mut response: GraphQLResponse = GraphQLResponse { data: None };
+
+        match github_http_post_gql(&query_str).await {
+            Ok(r) => {
+                response = match serde_json::from_slice::<GraphQLResponse>(&r) {
+                    Ok(res) => res,
+                    Err(err) => {
+                        log::error!("Failed to deserialize response from Github: {}", err);
+                        continue;
+                    }
+                };
+            }
+            Err(_e) => continue,
+        }
+
         let repository = response
             .data
             .and_then(|data| data.repository)
@@ -230,9 +243,6 @@ async fn track_stargazers(
     }
 
     let mut after_cursor: Option<String> = None;
-    // let octocrab = get_octo(&GithubLogin::Provided(
-    //     env::var("GITHUB_TOKEN").expect("github_token is required"),
-    // ));
 
     for _n in 1..99 {
         let query_str = format!(
@@ -279,8 +289,6 @@ async fn track_stargazers(
             .data
             .and_then(|data| data.repository)
             .and_then(|repo| repo.stargazers);
-
-        // log::info!("stargazers: {:?}", stargazers);
 
         if let Some(stargazers) = stargazers {
             for edge in stargazers.edges.unwrap_or_default() {
