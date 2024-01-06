@@ -210,7 +210,7 @@ async fn track_stargazers(
     struct StargazerNode {
         id: Option<String>,
         login: Option<String>,
-        email: String,
+        email: Option<String>,
         twitterUsername: Option<String>,
     }
 
