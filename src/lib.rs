@@ -231,7 +231,7 @@ async fn track_stargazers(
 
     let mut after_cursor: Option<String> = None;
     let octocrab = get_octo(&GithubLogin::Provided(
-        env::var("github_token").expect("github_token is required"),
+        env::var("GITHUB_TOKEN").expect("github_token is required"),
     ));
 
     for _n in 1..99 {
