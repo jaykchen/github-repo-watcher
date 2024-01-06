@@ -34,9 +34,25 @@ async fn handler(body: Vec<u8>) {
     wtr.write_record(&["Name", "Email", "Twitter", "Watching"])
         .expect("Failed to write record");
 
+    let mut forked_set = HashSet::new();
+
     if let Ok(found_watchers_set) = get_watchers(&owner, &repo).await {
-        let _ = track_forks(&owner, &repo, &found_watchers_set, &mut wtr).await;
-        let _ = track_stargazers(&owner, &repo, &found_watchers_set, &mut wtr).await;
+        let _ = track_forks(
+            &owner,
+            &repo,
+            &found_watchers_set,
+            &mut forked_set,
+            &mut wtr,
+        )
+        .await;
+        let _ = track_stargazers(
+            &owner,
+            &repo,
+            &found_watchers_set,
+            &mut forked_set,
+            &mut wtr,
+        )
+        .await;
     }
 
     let _ = upload_to_gist(wtr).await;
@@ -46,6 +62,7 @@ async fn track_forks(
     owner: &str,
     repo: &str,
     found_set: &HashSet<String>,
+    forked_set: &mut HashSet<String>,
     wtr: &mut csv::Writer<Vec<u8>>,
 ) -> anyhow::Result<()> {
     #[derive(Serialize, Deserialize, Debug)]
@@ -158,6 +175,7 @@ async fn track_forks(
                 if let Some(node) = edge.node {
                     if let Some(owner) = node.owner {
                         let login = owner.login.unwrap_or_default();
+                        forked_set.insert(login.clone());
                         let is_watching = match found_set.contains(&login) {
                             true => String::from("Yes"),
                             false => String::from(""),
@@ -197,6 +215,7 @@ async fn track_stargazers(
     owner: &str,
     repo: &str,
     found_set: &HashSet<String>,
+    forked_set: &mut HashSet<String>,
     wtr: &mut csv::Writer<Vec<u8>>,
 ) -> anyhow::Result<()> {
     #[derive(Serialize, Deserialize, Debug)]
@@ -294,6 +313,9 @@ async fn track_stargazers(
             for edge in stargazers.edges.unwrap_or_default() {
                 if let Some(node) = edge.node {
                     let login = node.login.clone().unwrap_or_default();
+                    if forked_set.contains(&login) {
+                        continue;
+                    }
                     let is_watching = match found_set.contains(&login) {
                         true => String::from("Yes"),
                         false => String::from(""),
