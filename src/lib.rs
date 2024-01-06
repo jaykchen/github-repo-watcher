@@ -101,8 +101,6 @@ async fn track_forks(
     let octocrab = get_octo(&GithubLogin::Default);
 
     'outer: for _n in 1..99 {
-        // log::info!("fork loop {}", _n);
-
         let query = format!(
             r#"
             query {{
@@ -180,6 +178,7 @@ async fn track_forks(
                 if page_info.has_next_page.unwrap_or(false) {
                     after_cursor = page_info.end_cursor;
                 } else {
+                    log::info!("fork loop {}", _n);
                     break;
                 }
             } else {
@@ -246,8 +245,6 @@ async fn track_stargazers(
     let octocrab = get_octo(&GithubLogin::Default);
 
     'outer: for _n in 1..99 {
-        // log::info!("stargazers loop {}", _n);
-
         let query_str = format!(
             r#"query {{
                 repository(owner: "{}", name: "{}") {{
@@ -316,6 +313,7 @@ async fn track_stargazers(
                 if page_info.has_next_page.unwrap_or(false) {
                     after_cursor = page_info.end_cursor;
                 } else {
+                    log::info!("stargazers loop {}", _n);
                     break;
                 }
             } else {
@@ -382,8 +380,6 @@ async fn get_watchers(
     let mut after_cursor = None;
 
     for _n in 1..99 {
-        // log::info!("watchers loop {}", _n);
-
         let query = format!(
             r#"
             query {{
@@ -435,7 +431,10 @@ async fn get_watchers(
                 Some(page_info) if page_info.has_next_page.unwrap_or(false) => {
                     after_cursor = page_info.end_cursor;
                 }
-                _ => break,
+                _ => {
+                    log::info!("watchers loop {}", _n);
+                    break;
+                }
             }
         } else {
             break;
