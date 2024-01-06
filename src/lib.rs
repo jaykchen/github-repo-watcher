@@ -78,7 +78,7 @@ async fn track_forks(
     #[derive(Serialize, Deserialize, Debug)]
     struct Owner {
         login: Option<String>,
-        email: String,
+        email: Option<String>,
         twitterUsername: Option<String>,
     }
 
@@ -164,7 +164,7 @@ async fn track_forks(
                         };
                         if let Err(err) = wtr.write_record(&[
                             login,
-                            owner.email,
+                            owner.email.unwrap_or("".to_string()),
                             owner.twitterUsername.unwrap_or("".to_string()),
                             is_watching,
                         ]) {
