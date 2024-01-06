@@ -305,7 +305,7 @@ async fn track_stargazers(
                     };
 
                     let is_watching = match _found_set.contains(&login) {
-                        true => String::from("Yes"),
+                        true => String::from("Y"),
                         false => String::from(""),
                     };
 
@@ -341,7 +341,7 @@ async fn track_stargazers(
 
     for (login, (email, twitter)) in forked_map {
         let is_watching = match _found_set.contains(login) {
-            true => String::from("Yes"),
+            true => String::from("Y"),
             false => String::from(""),
         };
 
