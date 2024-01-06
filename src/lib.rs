@@ -35,7 +35,7 @@ async fn handler(body: Vec<u8>) {
         .expect("Failed to write record");
 
     if let Ok(found_watchers_set) = get_watchers(&owner, &repo).await {
-        let _ = track_forks(&owner, &repo, &found_watchers_set, &mut wtr).await;
+        // let _ = track_forks(&owner, &repo, &found_watchers_set, &mut wtr).await;
         let _ = track_stargazers(&owner, &repo, &found_watchers_set, &mut wtr).await;
     }
 
