@@ -6,7 +6,10 @@ use flowsnet_platform_sdk::logger;
 use github_flows::{get_octo, GithubLogin};
 use schedule_flows::{schedule_cron_job, schedule_handler};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, env};
+use std::{
+    collections::{HashMap, HashSet},
+    env,
+};
 
 #[no_mangle]
 #[tokio::main(flavor = "current_thread")]
@@ -31,25 +34,18 @@ async fn handler(body: Vec<u8>) {
         .quote_style(QuoteStyle::Always)
         .from_writer(vec![]);
 
-    wtr.write_record(&["Name", "Email", "Twitter", "Watching"])
+    wtr.write_record(&["Name", "Forked", "Starred", "Email", "Twitter", "Watching"])
         .expect("Failed to write record");
 
-    let mut forked_set = HashSet::new();
+    let mut forked_map = HashMap::new();
 
     if let Ok(found_watchers_set) = get_watchers(&owner, &repo).await {
-        let _ = track_forks(
-            &owner,
-            &repo,
-            &found_watchers_set,
-            &mut forked_set,
-            &mut wtr,
-        )
-        .await;
+        let _ = track_forks(&owner, &repo, &found_watchers_set, &mut forked_map).await;
         let _ = track_stargazers(
             &owner,
             &repo,
             &found_watchers_set,
-            &mut forked_set,
+            &mut forked_map,
             &mut wtr,
         )
         .await;
@@ -61,9 +57,8 @@ async fn handler(body: Vec<u8>) {
 async fn track_forks(
     owner: &str,
     repo: &str,
-    found_set: &HashSet<String>,
-    forked_set: &mut HashSet<String>,
-    wtr: &mut csv::Writer<Vec<u8>>,
+    _found_set: &HashSet<String>,
+    forked_map: &mut HashMap<String, (String, String)>,
 ) -> anyhow::Result<()> {
     #[derive(Serialize, Deserialize, Debug)]
     struct GraphQLResponse {
@@ -116,7 +111,7 @@ async fn track_forks(
 
     let mut after_cursor: Option<String> = None;
 
-    for _n in 1..99 {
+    for _n in 1..499 {
         let query_str = format!(
             r#"
             query {{
@@ -150,7 +145,8 @@ async fn track_forks(
                 .map_or("null".to_string(), |cursor| format!(r#""{}""#, cursor))
         );
 
-        let mut response: GraphQLResponse = GraphQLResponse { data: None };
+        let  response: GraphQLResponse ;
+        // let mut response: GraphQLResponse = GraphQLResponse { data: None };
 
         match github_http_post_gql(&query_str).await {
             Ok(r) => {
@@ -172,26 +168,16 @@ async fn track_forks(
 
         if let Some(forks) = repository {
             for edge in forks.edges.unwrap_or_default() {
-                if let Some(node) = edge.node {
-                    if let Some(owner) = node.owner {
-                        let login = owner.login.unwrap_or_default();
-                        forked_set.insert(login.clone());
-                        let is_watching = match found_set.contains(&login) {
-                            true => String::from("Yes"),
-                            false => String::from(""),
-                        };
-                        if let Err(err) = wtr.write_record(&[
-                            login,
+                if let Some(owner) = edge.node.and_then(|node| node.owner) {
+                    forked_map.insert(
+                        owner.login.unwrap_or_default(),
+                        (
                             owner.email.unwrap_or("".to_string()),
                             owner.twitterUsername.unwrap_or("".to_string()),
-                            is_watching,
-                        ]) {
-                            log::error!("Failed to write record: {:?}", err);
-                        }
-                    }
+                        ),
+                    );
                 }
             }
-            wtr.flush()?;
 
             if let Some(page_info) = forks.page_info {
                 if page_info.has_next_page.unwrap_or(false) {
@@ -214,8 +200,8 @@ async fn track_forks(
 async fn track_stargazers(
     owner: &str,
     repo: &str,
-    found_set: &HashSet<String>,
-    forked_set: &mut HashSet<String>,
+    _found_set: &HashSet<String>,
+    forked_map: &mut HashMap<String, (String, String)>,
     wtr: &mut csv::Writer<Vec<u8>>,
 ) -> anyhow::Result<()> {
     #[derive(Serialize, Deserialize, Debug)]
@@ -263,7 +249,7 @@ async fn track_stargazers(
 
     let mut after_cursor: Option<String> = None;
 
-    for _n in 1..99 {
+    for _n in 1..499 {
         let query_str = format!(
             r#"query {{
                 repository(owner: "{}", name: "{}") {{
@@ -290,7 +276,7 @@ async fn track_stargazers(
                 .map_or("null".to_string(), |cursor| format!(r#""{}""#, cursor))
         );
 
-        let mut response: GraphQLResponse = GraphQLResponse { data: None };
+        let  response: GraphQLResponse;
 
         match github_http_post_gql(&query_str).await {
             Ok(r) => {
@@ -313,16 +299,20 @@ async fn track_stargazers(
             for edge in stargazers.edges.unwrap_or_default() {
                 if let Some(node) = edge.node {
                     let login = node.login.clone().unwrap_or_default();
-                    if forked_set.contains(&login) {
-                        continue;
-                    }
-                    let is_watching = match found_set.contains(&login) {
+                    let forked_or_not = match forked_map.remove(&login) {
+                        Some(_) => String::from("Y"),
+                        None => String::from(""),
+                    };
+
+                    let is_watching = match _found_set.contains(&login) {
                         true => String::from("Yes"),
                         false => String::from(""),
                     };
 
                     if let Err(err) = wtr.write_record(&[
                         login,
+                        forked_or_not,
+                        String::from("Y"),
                         node.email.unwrap_or("".to_string()),
                         node.twitterUsername.unwrap_or("".to_string()),
                         is_watching,
@@ -348,6 +338,25 @@ async fn track_stargazers(
             break;
         }
     }
+
+    for (login, (email, twitter)) in forked_map {
+        let is_watching = match _found_set.contains(login) {
+            true => String::from("Yes"),
+            false => String::from(""),
+        };
+
+        if let Err(err) = wtr.write_record(&[
+            login,
+            &String::from("Y"),
+            &String::from(""),
+            email,
+            twitter,
+            &is_watching,
+        ]) {
+            log::error!("Failed to write record: {:?}", err);
+        }
+    }
+    wtr.flush()?;
 
     Ok(())
 }
@@ -397,7 +406,7 @@ async fn get_watchers(owner: &str, repo: &str) -> anyhow::Result<HashSet<String>
     let octocrab = get_octo(&GithubLogin::Default);
     let mut after_cursor = None;
 
-    for _n in 1..99 {
+    for _n in 1..499 {
         let query = format!(
             r#"
             query {{
