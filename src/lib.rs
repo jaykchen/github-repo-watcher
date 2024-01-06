@@ -7,7 +7,7 @@ use github_flows::{get_octo, GithubLogin};
 use schedule_flows::{schedule_cron_job, schedule_handler};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, env};
-use octocrab_wasi::Octocrab;
+
 #[no_mangle]
 #[tokio::main(flavor = "current_thread")]
 pub async fn on_deploy() {
@@ -230,9 +230,9 @@ async fn track_stargazers(
     }
 
     let mut after_cursor: Option<String> = None;
-    // let octocrab = get_octo(&GithubLogin::Default);
-    let token = std::env::var("GITHUB_TOKEN").expect("GITHUB_TOKEN env variable is required");
-    let octocrab = Octocrab::builder().personal_token(token).build()?;
+    let octocrab = get_octo(&GithubLogin::Provided(
+        env::var("github_token").expect("github_token is required"),
+    ));
 
     for _n in 1..99 {
         let query_str = format!(
