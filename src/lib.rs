@@ -236,7 +236,7 @@ async fn track_stargazers(
         let query_str = format!(
             r#"query {{
                 repository(owner: "{}", name: "{}") {{
-                    stargazers(first: 100, after: {}) {{
+                    stargazers(first: 3, after: {}) {{
                         edges {{
                             node {{
                                 id
@@ -265,6 +265,9 @@ async fn track_stargazers(
             .and_then(|data| data.repository)
             .and_then(|repo| repo.stargazers);
 
+        log::info!("stargazers: {:?}", stargazers);
+
+      return  Ok(());
         if let Some(stargazers) = stargazers {
             for edge in stargazers.edges.unwrap_or_default() {
                 if let Some(node) = edge.node {
