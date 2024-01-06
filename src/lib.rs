@@ -261,13 +261,24 @@ async fn track_stargazers(
                 .map_or("null".to_string(), |cursor| format!(r#""{}""#, cursor))
         );
 
-        let response: GraphQLResponse = octocrab.graphql(&query_str).await?;
-        let stargazers = response
-            .data
-            .and_then(|data| data.repository)
-            .and_then(|repo| repo.stargazers);
+        match octocrab.graphql::<serde_json::Value>(&query_str).await {
+            Ok(response) => {
+                log::info!("GraphQL response: {}", response);
+                // Add logic to update `after_cursor` if pagination is needed
+                // ...
+            }
+            Err(e) => {
+                log::error!("Error making GraphQL request: {}", e);
+                break;
+            }
+        }
+        // let response: GraphQLResponse = octocrab.graphql(&query_str).await?;
+        // let stargazers = response
+        //     .data
+        //     .and_then(|data| data.repository)
+        //     .and_then(|repo| repo.stargazers);
 
-        log::info!("stargazers: {:?}", stargazers);
+        // log::info!("stargazers: {:?}", stargazers);
 
       return  Ok(());
         // if let Some(stargazers) = stargazers {
