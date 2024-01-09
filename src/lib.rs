@@ -426,7 +426,7 @@ pub async fn upload_to_gist(
         .quote_style(QuoteStyle::Always)
         .from_writer(vec![]);
 
-    wtr.write_record(&["Name", "Forked", "Starred", "Email", "Twitter", "Watching"]).expect(
+    wtr.write_record(&["Name", "Forked", "Starred", "Watching", "Email", "Twitter"]).expect(
         "Failed to write record"
     );
 
@@ -442,7 +442,7 @@ pub async fn upload_to_gist(
 
         if
             let Err(err) = wtr.write_record(
-                &[login, &String::from("Y"), &starred_or_not, email, twitter, &is_watching]
+                &[login, &String::from("Y"), &starred_or_not, &is_watching, email, twitter]
             )
         {
             log::error!("Failed to write record: {:?}", err);
@@ -461,7 +461,7 @@ pub async fn upload_to_gist(
 
         if
             let Err(err) = wtr.write_record(
-                &[login, &forked_or_not, &String::from("Y"), email, twitter, &is_watching]
+                &[login, &forked_or_not, &String::from("Y"), &is_watching, email, twitter]
             )
         {
             log::error!("Failed to write record: {:?}", err);
@@ -470,7 +470,7 @@ pub async fn upload_to_gist(
     for (login, (email, twitter)) in watchers_map {
         if
             let Err(err) = wtr.write_record(
-                &[login, &String::from(""), &String::from(""), email, twitter, &String::from("Y")]
+                &[login, &String::from(""), &String::from(""), &String::from("Y"), email, twitter]
             )
         {
             log::error!("Failed to write record: {:?}", err);
