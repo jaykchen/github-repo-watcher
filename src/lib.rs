@@ -26,36 +26,14 @@ async fn handler(body: Vec<u8>) {
     let owner = env::var("owner").unwrap_or("wasmedge".to_string());
     let repo = env::var("repo").unwrap_or("wasmedge".to_string());
 
-    let mut wtr = WriterBuilder::new()
-        .delimiter(b',')
-        .quote_style(QuoteStyle::Always)
-        .from_writer(vec![]);
+    let mut watchers_map = get_watchers(&owner, &repo).await.unwrap_or_default();
+    let mut forked_map = track_forks(&owner, &repo).await.unwrap_or_default();
+    let mut starred_map = track_stargazers(&owner, &repo).await.unwrap_or_default();
 
-    wtr.write_record(&["Name", "Forked", "Starred", "Email", "Twitter", "Watching"]).expect(
-        "Failed to write record"
-    );
-
-    let mut forked_map = HashMap::new();
-
-    if let Ok(mut found_watchers_map) = get_watchers(&owner, &repo).await {
-        let _ = track_forks(&owner, &repo, &mut forked_map).await;
-        let _ = track_stargazers(
-            &owner,
-            &repo,
-            &mut found_watchers_map,
-            &mut forked_map,
-            &mut wtr
-        ).await;
-    }
-
-    let _ = upload_to_gist(wtr).await;
+    let _ = upload_to_gist(&mut watchers_map, &mut forked_map, &mut starred_map).await;
 }
 
-async fn track_forks(
-    owner: &str,
-    repo: &str,
-    forked_map: &mut HashMap<String, (String, String)>
-) -> anyhow::Result<()> {
+async fn track_forks(owner: &str, repo: &str) -> anyhow::Result<HashMap<String, (String, String)>> {
     #[derive(Serialize, Deserialize, Debug)]
     struct GraphQLResponse {
         data: Option<RepositoryData>,
@@ -104,7 +82,7 @@ async fn track_forks(
         #[serde(rename = "pageInfo")]
         page_info: Option<PageInfo>,
     }
-
+    let mut forked_map: HashMap<String, (String, String)> = HashMap::new();
     let mut after_cursor: Option<String> = None;
 
     for _n in 1..499 {
@@ -184,16 +162,13 @@ async fn track_forks(
         }
     }
 
-    Ok(())
+    Ok(forked_map)
 }
 
 async fn track_stargazers(
     owner: &str,
-    repo: &str,
-    _found_watchers_map: &mut HashMap<String, (String, String)>,
-    forked_map: &mut HashMap<String, (String, String)>,
-    wtr: &mut csv::Writer<Vec<u8>>
-) -> anyhow::Result<()> {
+    repo: &str
+) -> anyhow::Result<HashMap<String, (String, String)>> {
     #[derive(Serialize, Deserialize, Debug)]
     struct GraphQLResponse {
         data: Option<RepositoryData>,
@@ -236,6 +211,8 @@ async fn track_stargazers(
         #[serde(rename = "pageInfo")]
         page_info: Option<PageInfo>,
     }
+
+    let mut starred_map: HashMap<String, (String, String)> = HashMap::new();
 
     let mut after_cursor: Option<String> = None;
 
@@ -287,34 +264,12 @@ async fn track_stargazers(
         if let Some(stargazers) = stargazers {
             for edge in stargazers.edges.unwrap_or_default() {
                 if let Some(node) = edge.node {
-                    let login = node.login.clone().unwrap_or_default();
-                    let forked_or_not = match forked_map.remove(&login) {
-                        Some(_) => String::from("Y"),
-                        None => String::from(""),
-                    };
-
-                    let is_watching = match _found_watchers_map.remove(&login) {
-                        Some(_) => String::from("Y"),
-                        None => String::from(""),
-                    };
-
-                    if
-                        let Err(err) = wtr.write_record(
-                            &[
-                                login,
-                                forked_or_not,
-                                String::from("Y"),
-                                node.email.unwrap_or("".to_string()),
-                                node.twitterUsername.unwrap_or("".to_string()),
-                                is_watching,
-                            ]
-                        )
-                    {
-                        log::error!("Failed to write record: {:?}", err);
-                    }
+                    starred_map.insert(node.login.clone().unwrap_or_default(), (
+                        node.email.unwrap_or(String::from("")),
+                        node.twitterUsername.unwrap_or(String::from("")),
+                    ));
                 }
             }
-            wtr.flush()?;
 
             if let Some(page_info) = stargazers.page_info {
                 if page_info.has_next_page.unwrap_or(false) {
@@ -332,32 +287,7 @@ async fn track_stargazers(
         }
     }
 
-    for (login, (email, twitter)) in forked_map {
-        let is_watching = match _found_watchers_map.remove(login) {
-            Some(_) => String::from("Y"),
-            None => String::from(""),
-        };
-
-        if
-            let Err(err) = wtr.write_record(
-                &[login, &String::from("Y"), &String::from(""), email, twitter, &is_watching]
-            )
-        {
-            log::error!("Failed to write record: {:?}", err);
-        }
-    }
-    for (login, (email, twitter)) in _found_watchers_map {
-        if
-            let Err(err) = wtr.write_record(
-                &[login, &String::from(""), &String::from(""), email, twitter, &String::from("Y")]
-            )
-        {
-            log::error!("Failed to write record: {:?}", err);
-        }
-    }
-    wtr.flush()?;
-
-    Ok(())
+    Ok(starred_map)
 }
 
 async fn get_watchers(
@@ -486,8 +416,67 @@ async fn get_watchers(
     }
 }
 
-pub async fn upload_to_gist(wtr: csv::Writer<Vec<u8>>) -> anyhow::Result<()> {
-    let octocrab = get_octo(&GithubLogin::Default);
+pub async fn upload_to_gist(
+    watchers_map: &mut HashMap<String, (String, String)>,
+    forked_map: &mut HashMap<String, (String, String)>,
+    starred_map: &mut HashMap<String, (String, String)>
+) -> anyhow::Result<()> {
+    let mut wtr = WriterBuilder::new()
+        .delimiter(b',')
+        .quote_style(QuoteStyle::Always)
+        .from_writer(vec![]);
+
+    wtr.write_record(&["Name", "Forked", "Starred", "Email", "Twitter", "Watching"]).expect(
+        "Failed to write record"
+    );
+
+    for (login, (email, twitter)) in &mut *forked_map {
+        let starred_or_not = match starred_map.remove(login) {
+            Some(_) => String::from("Y"),
+            None => String::from(""),
+        };
+        let is_watching = match watchers_map.remove(login) {
+            Some(_) => String::from("Y"),
+            None => String::from(""),
+        };
+
+        if
+            let Err(err) = wtr.write_record(
+                &[login, &String::from("Y"), &starred_or_not, email, twitter, &is_watching]
+            )
+        {
+            log::error!("Failed to write record: {:?}", err);
+        }
+    }
+    for (login, (email, twitter)) in starred_map {
+        let forked_or_not = match forked_map.remove(login) {
+            Some(_) => String::from("Y"),
+            None => String::from(""),
+        };
+
+        let is_watching = match watchers_map.remove(login) {
+            Some(_) => String::from("Y"),
+            None => String::from(""),
+        };
+
+        if
+            let Err(err) = wtr.write_record(
+                &[login, &forked_or_not, &String::from("Y"), email, twitter, &is_watching]
+            )
+        {
+            log::error!("Failed to write record: {:?}", err);
+        }
+    }
+    for (login, (email, twitter)) in watchers_map {
+        if
+            let Err(err) = wtr.write_record(
+                &[login, &String::from(""), &String::from(""), email, twitter, &String::from("Y")]
+            )
+        {
+            log::error!("Failed to write record: {:?}", err);
+        }
+    }
+    // wtr.flush()?;
 
     let data = match wtr.into_inner() {
         Ok(d) => d,
@@ -499,6 +488,7 @@ pub async fn upload_to_gist(wtr: csv::Writer<Vec<u8>>) -> anyhow::Result<()> {
     let formatted_answer = String::from_utf8(data)?;
 
     let filename = format!("report_{}.csv", Utc::now().format("%d-%m-%Y"));
+    let octocrab = get_octo(&GithubLogin::Default);
 
     let _ = octocrab
         .gists()
