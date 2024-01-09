@@ -429,6 +429,7 @@ pub async fn upload_to_gist(
     wtr.write_record(&["Name", "Forked", "Starred", "Watching", "Email", "Twitter"]).expect(
         "Failed to write record"
     );
+        log::info!("forked_map len {}", forked_map.len());
 
     for (login, (email, twitter)) in &mut *forked_map {
         let starred_or_not = match starred_map.remove(login) {
@@ -448,6 +449,8 @@ pub async fn upload_to_gist(
             log::error!("Failed to write record: {:?}", err);
         }
     }
+    log::info!("star_map len {}", starred_map.len());
+
     for (login, (email, twitter)) in starred_map {
         let forked_or_not = match forked_map.remove(login) {
             Some(_) => String::from("Y"),
@@ -467,6 +470,8 @@ pub async fn upload_to_gist(
             log::error!("Failed to write record: {:?}", err);
         }
     }
+    log::info!("wachers len {}", watchers_map.len());
+
     for (login, (email, twitter)) in watchers_map {
         if
             let Err(err) = wtr.write_record(
