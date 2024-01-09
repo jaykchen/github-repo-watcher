@@ -429,7 +429,7 @@ pub async fn upload_to_gist(
     wtr.write_record(&["Name", "Forked", "Starred", "Watching", "Email", "Twitter"]).expect(
         "Failed to write record"
     );
-        log::info!("forked_map len {}", forked_map.len());
+    log::info!("forked_map len {}", forked_map.len());
 
     for (login, (email, twitter)) in &mut *forked_map {
         let starred_or_not = match starred_map.remove(login) {
@@ -492,7 +492,16 @@ pub async fn upload_to_gist(
     };
     let formatted_answer = String::from_utf8(data)?;
 
-    let filename = format!("report_{}.csv", Utc::now().format("%d-%m-%Y"));
+    let time_tag = format!(
+        "{:05}",
+        std::time::SystemTime
+            ::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_micros() % 100_000
+    );
+    let filename = format!("report_{}_{}.csv", Utc::now().format("%d-%m-%Y"), time_tag);
+
     let octocrab = get_octo(&GithubLogin::Default);
 
     let _ = octocrab
