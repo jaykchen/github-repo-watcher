@@ -1,36 +1,74 @@
 use anyhow;
-use chrono::{ Datelike, Timelike, Utc };
 use csv::{ QuoteStyle, WriterBuilder };
 use dotenv::dotenv;
 use flowsnet_platform_sdk::logger;
 use github_flows::{ get_octo, GithubLogin };
-use schedule_flows::{ schedule_cron_job, schedule_handler };
 use serde::{ Deserialize, Serialize };
-use std::{ collections::{ HashMap }, env };
+use std::{ collections::HashMap, env };
+use serde_json::Value;
+use webhook_flows::{ create_endpoint, request_handler, send_response };
 
 #[no_mangle]
 #[tokio::main(flavor = "current_thread")]
 pub async fn on_deploy() {
-    // schedule_cron_job(String::from("0 11 * * *"), String::from("cron_job_evoked")).await;
-
-    let now = Utc::now();
-    let now_minute = now.minute() + 2;
-    let cron_time = format!("{:02} {:02} {:02} * *", now_minute, now.hour(), now.day());
-    schedule_cron_job(cron_time, String::from("cron_job_evoked")).await;
+    create_endpoint().await;
 }
 
-#[schedule_handler]
-async fn handler(body: Vec<u8>) {
+#[request_handler]
+async fn handler(
+    _headers: Vec<(String, String)>,
+    _subpath: String,
+    _qry: HashMap<String, Value>,
+    _body: Vec<u8>
+) {
     dotenv().ok();
     logger::init();
-    let owner = env::var("owner").unwrap_or("wasmedge".to_string());
-    let repo = env::var("repo").unwrap_or("wasmedge".to_string());
+
+    let OPENAI_API_KEY = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
+    let token = env::var("GITHUB_TOKEN").expect("github_token is required");
+
+    let (owner, repo) = match
+        (
+            _qry.get("owner").unwrap_or(&Value::Null).as_str(),
+            _qry.get("repo").unwrap_or(&Value::Null).as_str(),
+        )
+    {
+        (Some(o), Some(r)) => (o.to_string(), r.to_string()),
+        (_, _) => {
+            send_response(
+                400,
+                vec![(String::from("content-type"), String::from("text/plain"))],
+                "You must provide an owner and repo name.".as_bytes().to_vec()
+            );
+            return;
+        }
+    };
 
     let mut watchers_map = get_watchers(&owner, &repo).await.unwrap_or_default();
     let mut forked_map = track_forks(&owner, &repo).await.unwrap_or_default();
     let mut starred_map = track_stargazers(&owner, &repo).await.unwrap_or_default();
 
-    let _ = upload_to_gist(&mut watchers_map, &mut forked_map, &mut starred_map).await;
+    match report_as_md(&mut watchers_map, &mut forked_map, &mut starred_map).await {
+        Err(_e) => {
+            log::error!("Error generating report in md: {:?}", _e);
+            send_response(
+                400,
+                vec![(String::from("content-type"), String::from("text/plain"))],
+                "You've entered invalid owner/repo, or the target is private. Please try again."
+                    .as_bytes()
+                    .to_vec()
+            );
+            std::process::exit(1);
+        }
+        Ok(report) => {
+            send_response(
+                200,
+                vec![(String::from("content-type"), String::from("text/plain"))],
+                report.as_bytes().to_vec()
+            );
+        }
+    }
+    return;
 }
 
 async fn track_forks(owner: &str, repo: &str) -> anyhow::Result<HashMap<String, (String, String)>> {
@@ -416,11 +454,11 @@ async fn get_watchers(
     }
 }
 
-pub async fn upload_to_gist(
+pub async fn report_as_md(
     watchers_map: &mut HashMap<String, (String, String)>,
     forked_map: &mut HashMap<String, (String, String)>,
     starred_map: &mut HashMap<String, (String, String)>
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
     let mut wtr = WriterBuilder::new()
         .delimiter(b',')
         .quote_style(QuoteStyle::Always)
@@ -486,32 +524,43 @@ pub async fn upload_to_gist(
     let data = match wtr.into_inner() {
         Ok(d) => d,
         Err(_e) => {
-            log::error!("Failed to write record: {:?}", _e);
+            log::error!("Failed to get inner writer: {:?}", _e);
             vec![]
         }
     };
-    let formatted_answer = String::from_utf8(data)?;
 
-    let time_tag = format!(
-        "{:05}",
-        std::time::SystemTime
-            ::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("Time went backwards")
-            .as_micros() % 100_000
-    );
-    let filename = format!("report_{}_{}.csv", Utc::now().format("%d-%m-%Y"), time_tag);
+    let csv_data = String::from_utf8(data)?;
 
-    let octocrab = get_octo(&GithubLogin::Default);
+    let mut rdr = csv::Reader::from_reader(csv_data.as_bytes());
+    let mut markdown_output = String::new();
 
-    let _ = octocrab
-        .gists()
-        .create()
-        .description("Daily Tracking Report")
-        .public(false) // set to true if you want the gist to be public
-        .file(filename, formatted_answer)
-        .send().await;
-    Ok(())
+    if let Some(headers) = rdr.headers().ok() {
+        let headers_md: Vec<String> = headers
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        markdown_output.push_str(&format!("| {} |\n", headers_md.join(" | ")));
+        markdown_output.push_str(
+            &format!(
+                "|{}|\n",
+                headers_md
+                    .iter()
+                    .map(|_| "---")
+                    .collect::<Vec<_>>()
+                    .join("|")
+            )
+        );
+    }
+
+    for result in rdr.records() {
+        let record = result?;
+        let row_md: Vec<String> = record
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        markdown_output.push_str(&format!("| {} |\n", row_md.join(" | ")));
+    }
+    Ok(markdown_output)
 }
 
 pub async fn github_http_post_gql(query: &str) -> anyhow::Result<Vec<u8>> {
