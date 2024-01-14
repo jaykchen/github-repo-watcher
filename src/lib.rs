@@ -24,7 +24,6 @@ async fn handler(
     dotenv().ok();
     logger::init();
 
-    let OPENAI_API_KEY = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
     let token = env::var("GITHUB_TOKEN").expect("github_token is required");
 
     let (owner, repo) = match
