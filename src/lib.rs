@@ -4,7 +4,7 @@ use dotenv::dotenv;
 use flowsnet_platform_sdk::logger;
 use github_flows::{ get_octo, GithubLogin };
 use serde::{ Deserialize, Serialize };
-use std::{ collections::HashMap, env };
+use std::collections::HashMap;
 use serde_json::Value;
 use webhook_flows::{ create_endpoint, request_handler, send_response };
 
@@ -24,53 +24,65 @@ async fn handler(
     dotenv().ok();
     logger::init();
 
-    let token = env::var("GITHUB_TOKEN").expect("github_token is required");
+    let owner_repo = _qry
+        .get("owner_repo")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
 
-    let (owner, repo) = match
-        (
-            _qry.get("owner").unwrap_or(&Value::Null).as_str(),
-            _qry.get("repo").unwrap_or(&Value::Null).as_str(),
-        )
-    {
-        (Some(o), Some(r)) => (o.to_string(), r.to_string()),
-        (_, _) => {
+    if owner_repo == String::from("") {
+        send_response(
+            400,
+            vec![(String::from("content-type"), String::from("text/plain"))],
+            "You must provide an owner/repo name.".as_bytes().to_vec()
+        );
+        return;
+    } else {
+        let token = _qry
+            .get("token")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        if token == String::from("") {
             send_response(
                 400,
                 vec![(String::from("content-type"), String::from("text/plain"))],
-                "You must provide an owner and repo name.".as_bytes().to_vec()
+                "You must provide a valid github_token.".as_bytes().to_vec()
             );
             return;
         }
-    };
+        let mut watchers_map = get_watchers(&owner_repo, &token).await.unwrap_or_default();
+        let mut forked_map = track_forks(&owner_repo, &token).await.unwrap_or_default();
+        let mut starred_map = track_stargazers(&owner_repo, &token).await.unwrap_or_default();
 
-    let mut watchers_map = get_watchers(&owner, &repo).await.unwrap_or_default();
-    let mut forked_map = track_forks(&owner, &repo).await.unwrap_or_default();
-    let mut starred_map = track_stargazers(&owner, &repo).await.unwrap_or_default();
-
-    match report_as_md(&mut watchers_map, &mut forked_map, &mut starred_map).await {
-        Err(_e) => {
-            log::error!("Error generating report in md: {:?}", _e);
-            send_response(
-                400,
-                vec![(String::from("content-type"), String::from("text/plain"))],
-                "You've entered invalid owner/repo, or the target is private. Please try again."
-                    .as_bytes()
-                    .to_vec()
-            );
-            std::process::exit(1);
+        match report_as_md(&mut watchers_map, &mut forked_map, &mut starred_map).await {
+            Err(_e) => {
+                log::error!("Error generating report in md: {:?}", _e);
+                send_response(
+                    400,
+                    vec![(String::from("content-type"), String::from("text/plain"))],
+                    "You've entered invalid owner/repo, or the target is private. Please try again."
+                        .as_bytes()
+                        .to_vec()
+                );
+                std::process::exit(1);
+            }
+            Ok(report) => {
+                send_response(
+                    200,
+                    vec![(String::from("content-type"), String::from("text/plain"))],
+                    report.as_bytes().to_vec()
+                );
+            }
         }
-        Ok(report) => {
-            send_response(
-                200,
-                vec![(String::from("content-type"), String::from("text/plain"))],
-                report.as_bytes().to_vec()
-            );
-        }
+        return;
     }
-    return;
 }
 
-async fn track_forks(owner: &str, repo: &str) -> anyhow::Result<HashMap<String, (String, String)>> {
+async fn track_forks(
+    owner_repo: &str,
+    token: &str
+) -> anyhow::Result<HashMap<String, (String, String)>> {
     #[derive(Serialize, Deserialize, Debug)]
     struct GraphQLResponse {
         data: Option<RepositoryData>,
@@ -122,6 +134,7 @@ async fn track_forks(owner: &str, repo: &str) -> anyhow::Result<HashMap<String, 
     let mut forked_map: HashMap<String, (String, String)> = HashMap::new();
     let mut after_cursor: Option<String> = None;
 
+    let (owner, repo) = owner_repo.split_once("/").unwrap_or_default();
     for _n in 1..499 {
         let query_str = format!(
             r#"
@@ -157,7 +170,7 @@ async fn track_forks(owner: &str, repo: &str) -> anyhow::Result<HashMap<String, 
         let response: GraphQLResponse;
         // let mut response: GraphQLResponse = GraphQLResponse { data: None };
 
-        match github_http_post_gql(&query_str).await {
+        match github_http_post_gql(&query_str, &token).await {
             Ok(r) => {
                 response = match serde_json::from_slice::<GraphQLResponse>(&r) {
                     Ok(res) => res,
@@ -203,8 +216,8 @@ async fn track_forks(owner: &str, repo: &str) -> anyhow::Result<HashMap<String, 
 }
 
 async fn track_stargazers(
-    owner: &str,
-    repo: &str
+    owner_repo: &str,
+    token: &str
 ) -> anyhow::Result<HashMap<String, (String, String)>> {
     #[derive(Serialize, Deserialize, Debug)]
     struct GraphQLResponse {
@@ -252,6 +265,7 @@ async fn track_stargazers(
     let mut starred_map: HashMap<String, (String, String)> = HashMap::new();
 
     let mut after_cursor: Option<String> = None;
+    let (owner, repo) = owner_repo.split_once("/").unwrap_or_default();
 
     for _n in 1..499 {
         let query_str = format!(
@@ -280,7 +294,7 @@ async fn track_stargazers(
 
         let response: GraphQLResponse;
 
-        match github_http_post_gql(&query_str).await {
+        match github_http_post_gql(&query_str, &token).await {
             Ok(r) => {
                 response = match serde_json::from_slice::<GraphQLResponse>(&r) {
                     Ok(res) => res,
@@ -328,8 +342,8 @@ async fn track_stargazers(
 }
 
 async fn get_watchers(
-    owner: &str,
-    repo: &str
+    owner_repo: &str,
+    token: &str
 ) -> anyhow::Result<HashMap<String, (String, String)>> {
     #[derive(Serialize, Deserialize, Debug)]
     struct GraphQLResponse {
@@ -376,6 +390,7 @@ async fn get_watchers(
 
     let octocrab = get_octo(&GithubLogin::Default);
     let mut after_cursor = None;
+    let (owner, repo) = owner_repo.split_once("/").unwrap_or_default();
 
     for _n in 1..499 {
         let query_str = format!(
@@ -404,7 +419,7 @@ async fn get_watchers(
         );
 
         let response: GraphQLResponse;
-        match github_http_post_gql(&query_str).await {
+        match github_http_post_gql(&query_str, &token).await {
             Ok(r) => {
                 response = match serde_json::from_slice::<GraphQLResponse>(&r) {
                     Ok(res) => res,
@@ -562,9 +577,8 @@ pub async fn report_as_md(
     Ok(markdown_output)
 }
 
-pub async fn github_http_post_gql(query: &str) -> anyhow::Result<Vec<u8>> {
+pub async fn github_http_post_gql(query: &str, token: &str) -> anyhow::Result<Vec<u8>> {
     use http_req::{ request::Method, request::Request, uri::Uri };
-    let token = env::var("GITHUB_TOKEN").expect("github_token is required");
     let base_url = "https://api.github.com/graphql";
     let base_url = Uri::try_from(base_url).unwrap();
     let mut writer = Vec::new();
