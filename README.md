@@ -12,6 +12,6 @@ You'll get a unique webhook url after your function is deployed.
 Use the webhook url to call the function. For example:
 
 ```
-https://code.flows.network/webhook/vIognrnNfVdQSlIRIyIM?owner=second-state&repo=LlamaEdge
+https://code.flows.network/webhook/vIognrnNfVdQSlIRIyIM?owner_repo=second-state/LlamaEdge
 ```
 
