@@ -2,11 +2,11 @@ use anyhow;
 use csv::{ QuoteStyle, WriterBuilder };
 use dotenv::dotenv;
 use flowsnet_platform_sdk::logger;
-use github_flows::{ get_octo, GithubLogin };
 use serde::{ Deserialize, Serialize };
 use std::collections::HashMap;
 use serde_json::Value;
 use webhook_flows::{ create_endpoint, request_handler, send_response };
+use std::env;
 
 #[no_mangle]
 #[tokio::main(flavor = "current_thread")]
@@ -38,22 +38,10 @@ async fn handler(
         );
         return;
     } else {
-        let token = _qry
-            .get("token")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-        if token == String::from("") {
-            send_response(
-                400,
-                vec![(String::from("content-type"), String::from("text/plain"))],
-                "You must provide a valid github_token.".as_bytes().to_vec()
-            );
-            return;
-        }
-        let mut watchers_map = get_watchers(&owner_repo, &token).await.unwrap_or_default();
-        let mut forked_map = track_forks(&owner_repo, &token).await.unwrap_or_default();
-        let mut starred_map = track_stargazers(&owner_repo, &token).await.unwrap_or_default();
+
+        let mut watchers_map = get_watchers(&owner_repo).await.unwrap_or_default();
+        let mut forked_map = track_forks(&owner_repo).await.unwrap_or_default();
+        let mut starred_map = track_stargazers(&owner_repo).await.unwrap_or_default();
 
         match report_as_md(&mut watchers_map, &mut forked_map, &mut starred_map).await {
             Err(_e) => {
@@ -79,10 +67,7 @@ async fn handler(
     }
 }
 
-async fn track_forks(
-    owner_repo: &str,
-    token: &str
-) -> anyhow::Result<HashMap<String, (String, String)>> {
+async fn track_forks(owner_repo: &str) -> anyhow::Result<HashMap<String, (String, String)>> {
     #[derive(Serialize, Deserialize, Debug)]
     struct GraphQLResponse {
         data: Option<RepositoryData>,
@@ -131,6 +116,7 @@ async fn track_forks(
         #[serde(rename = "pageInfo")]
         page_info: Option<PageInfo>,
     }
+
     let mut forked_map: HashMap<String, (String, String)> = HashMap::new();
     let mut after_cursor: Option<String> = None;
 
@@ -170,7 +156,7 @@ async fn track_forks(
         let response: GraphQLResponse;
         // let mut response: GraphQLResponse = GraphQLResponse { data: None };
 
-        match github_http_post_gql(&query_str, &token).await {
+        match github_http_post_gql(&query_str).await {
             Ok(r) => {
                 response = match serde_json::from_slice::<GraphQLResponse>(&r) {
                     Ok(res) => res,
@@ -215,10 +201,7 @@ async fn track_forks(
     Ok(forked_map)
 }
 
-async fn track_stargazers(
-    owner_repo: &str,
-    token: &str
-) -> anyhow::Result<HashMap<String, (String, String)>> {
+async fn track_stargazers(owner_repo: &str) -> anyhow::Result<HashMap<String, (String, String)>> {
     #[derive(Serialize, Deserialize, Debug)]
     struct GraphQLResponse {
         data: Option<RepositoryData>,
@@ -294,7 +277,7 @@ async fn track_stargazers(
 
         let response: GraphQLResponse;
 
-        match github_http_post_gql(&query_str, &token).await {
+        match github_http_post_gql(&query_str).await {
             Ok(r) => {
                 response = match serde_json::from_slice::<GraphQLResponse>(&r) {
                     Ok(res) => res,
@@ -341,10 +324,7 @@ async fn track_stargazers(
     Ok(starred_map)
 }
 
-async fn get_watchers(
-    owner_repo: &str,
-    token: &str
-) -> anyhow::Result<HashMap<String, (String, String)>> {
+async fn get_watchers(owner_repo: &str) -> anyhow::Result<HashMap<String, (String, String)>> {
     #[derive(Serialize, Deserialize, Debug)]
     struct GraphQLResponse {
         data: Option<RepositoryData>,
@@ -385,10 +365,8 @@ async fn get_watchers(
         #[serde(rename = "pageInfo")]
         page_info: Option<PageInfo>,
     }
-
     let mut watchers_map = HashMap::<String, (String, String)>::new();
 
-    let octocrab = get_octo(&GithubLogin::Default);
     let mut after_cursor = None;
     let (owner, repo) = owner_repo.split_once("/").unwrap_or_default();
 
@@ -419,7 +397,7 @@ async fn get_watchers(
         );
 
         let response: GraphQLResponse;
-        match github_http_post_gql(&query_str, &token).await {
+        match github_http_post_gql(&query_str).await {
             Ok(r) => {
                 response = match serde_json::from_slice::<GraphQLResponse>(&r) {
                     Ok(res) => res,
@@ -577,8 +555,9 @@ pub async fn report_as_md(
     Ok(markdown_output)
 }
 
-pub async fn github_http_post_gql(query: &str, token: &str) -> anyhow::Result<Vec<u8>> {
+pub async fn github_http_post_gql(query: &str) -> anyhow::Result<Vec<u8>> {
     use http_req::{ request::Method, request::Request, uri::Uri };
+    let token = env::var("GITHUB_TOKEN").expect("github_token is required");
     let base_url = "https://api.github.com/graphql";
     let base_url = Uri::try_from(base_url).unwrap();
     let mut writer = Vec::new();
