@@ -1,18 +1,15 @@
 # github-repo-watcher
 
-A simple tool to watch a Github repository and logs new users that engage by creating new forks, starring the repository, or watch it. The daily log is saved to the your gist as a private gist in csv format.
-
+A webhook to analyze the stars, forks, watches and users of any public GitHub repo.
 
 ## Usage
 
-Set the exact time to trigger the serverless function as a cron job in this code block.
-
+Set the following env vars
 
 ```
-schedule_cron_job(String::from("0 11 * * *"), String::from("cron_job_evoked")).await;
+DATABASE_URL
+mysql://user:pass@host:3306/database
+
+GITHUB_TOKEN
+ghp_1234
 ```
-
-Set the 'owner' and 'repo', 'GITHUB_TOKEN' environment variables on the Flows settings page.
-
-
-Then, you'll get daily updates on your gist.

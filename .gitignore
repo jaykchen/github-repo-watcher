@@ -3,3 +3,4 @@ Cargo.lock
 .env
 subscriber.payload.json
 query.json
+credentials.md
