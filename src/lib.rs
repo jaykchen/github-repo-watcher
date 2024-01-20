@@ -16,7 +16,6 @@ struct OwnerRepo {
     owner_repo: String,
     count: u64,
     sub_id: String,
-    checkout_session: String,
 }
 impl OwnerRepo {
     fn new(
@@ -24,14 +23,12 @@ impl OwnerRepo {
         owner_repo: String,
         count: u64,
         sub_id: String,
-        checkout_session: String,
     ) -> Self {
         Self {
             or_id,
             owner_repo,
             count,
             sub_id,
-            checkout_session,
         }
     }
 }
@@ -74,17 +71,18 @@ async fn handler(
           .with(params! {
             "owner_repo" => owner_repo.to_uppercase(),
           }).map(&mut conn, |(or_id, count, sub_id)|
-              OwnerRepo::new(or_id, owner_repo.clone(), count, sub_id, "".to_string())
+              OwnerRepo::new(or_id, owner_repo.clone(), count, sub_id)
           ).await.unwrap();
 
         if repos.len() < 1 {
-            r"INSERT INTO repos (owner_repo, count, sub_id, checkout_session)
-            VALUES (:owner_repo, :count, :sub_id, :checkout_session)"
+            r"INSERT INTO repos (owner_repo, count, sub_id, checkout_session, sub_update)
+            VALUES (:owner_repo, :count, :sub_id, :checkout_session, :sub_update)"
               .with(params! {
                 "owner_repo" => owner_repo.clone().to_uppercase(),
                 "count" => 1,
                 "sub_id" => "".to_string(),
                 "checkout_session" => "".to_string(),
+                "sub_update" => "".to_string(),
               }).ignore(&mut conn).await.unwrap();
         } else {
             if repos[0].count > 5 && repos[0].sub_id.is_empty() {
