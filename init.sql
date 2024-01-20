@@ -4,6 +4,7 @@ CREATE TABLE repos (
     updated_on TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     owner_repo VARCHAR(1024) DEFAULT "",
     count INT DEFAULT 0,
-    sub_exp_date INT DEFAULT 0,
+    sub_id VARCHAR(256) DEFAULT "",
+    checkout_session TEXT,
     PRIMARY KEY (or_id)
 );

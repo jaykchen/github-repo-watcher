@@ -9,28 +9,29 @@ use webhook_flows::{ create_endpoint, request_handler, send_response };
 use std::env;
 // use mysql_async::{prelude::*, Opts, OptsBuilder, Conn, Pool, PoolConstraints, PoolOpts, SslOpts};
 use mysql_async::{prelude::*, Opts, OptsBuilder, Conn, Pool, PoolConstraints, PoolOpts};
-use chrono::prelude::*;
-
 
 #[derive(Default, Serialize, Deserialize)]
 struct OwnerRepo {
     or_id: u64,
     owner_repo: String,
     count: u64,
-    sub_exp_date: u64,
+    sub_id: String,
+    checkout_session: String,
 }
 impl OwnerRepo {
     fn new(
         or_id: u64,
         owner_repo: String,
         count: u64,
-        sub_exp_date: u64,
+        sub_id: String,
+        checkout_session: String,
     ) -> Self {
         Self {
             or_id,
             owner_repo,
             count,
-            sub_exp_date,
+            sub_id,
+            checkout_session,
         }
     }
 }
@@ -69,23 +70,24 @@ async fn handler(
         let pool = get_conn_pool();
         let mut conn = pool.get_conn().await.unwrap();
 
-        let repos = "SELECT or_id, count, sub_exp_date FROM repos WHERE owner_repo=:owner_repo"
+        let repos = "SELECT or_id, count, sub_id FROM repos WHERE owner_repo=:owner_repo"
           .with(params! {
             "owner_repo" => owner_repo.to_uppercase(),
-          }).map(&mut conn, |(or_id, count, sub_exp_date)|
-              OwnerRepo::new(or_id, owner_repo.clone(), count, sub_exp_date)
+          }).map(&mut conn, |(or_id, count, sub_id)|
+              OwnerRepo::new(or_id, owner_repo.clone(), count, sub_id, "".to_string())
           ).await.unwrap();
 
         if repos.len() < 1 {
-            r"INSERT INTO repos (owner_repo, count, sub_exp_date)
-            VALUES (:owner_repo, :count, :sub_exp_date)"
+            r"INSERT INTO repos (owner_repo, count, sub_id, checkout_session)
+            VALUES (:owner_repo, :count, :sub_id, :checkout_session)"
               .with(params! {
                 "owner_repo" => owner_repo.clone().to_uppercase(),
                 "count" => 1,
-                "sub_exp_date" => 0,
+                "sub_id" => "".to_string(),
+                "checkout_session" => "".to_string(),
               }).ignore(&mut conn).await.unwrap();
         } else {
-            if repos[0].count > 5 && repos[0].sub_exp_date < Utc::now().timestamp().try_into().unwrap() {
+            if repos[0].count > 5 && repos[0].sub_id.is_empty() {
                 send_response(
                     403,
                     vec![(String::from("content-type"), String::from("text/plain"))],
