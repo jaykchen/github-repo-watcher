@@ -5,7 +5,5 @@ CREATE TABLE repos (
     owner_repo VARCHAR(1024) DEFAULT "",
     count INT DEFAULT 0,
     sub_id VARCHAR(256) DEFAULT "",
-    checkout_session TEXT,
-    sub_update TEXT,
     PRIMARY KEY (or_id)
 );

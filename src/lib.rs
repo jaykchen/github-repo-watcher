@@ -75,14 +75,12 @@ async fn handler(
           ).await.unwrap();
 
         if repos.len() < 1 {
-            r"INSERT INTO repos (owner_repo, count, sub_id, checkout_session, sub_update)
-            VALUES (:owner_repo, :count, :sub_id, :checkout_session, :sub_update)"
+            r"INSERT INTO repos (owner_repo, count, sub_id)
+            VALUES (:owner_repo, :count, :sub_id)"
               .with(params! {
                 "owner_repo" => owner_repo.clone().to_uppercase(),
                 "count" => 1,
                 "sub_id" => "".to_string(),
-                "checkout_session" => "".to_string(),
-                "sub_update" => "".to_string(),
               }).ignore(&mut conn).await.unwrap();
         } else {
             if repos[0].count > 5 && repos[0].sub_id.is_empty() {
