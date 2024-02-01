@@ -42,6 +42,7 @@ async fn handler(
         let mut forked_map = track_forks(&owner_repo).await.unwrap_or_default();
         let mut starred_map = track_stargazers(&owner_repo).await.unwrap_or_default();
 
+        log::info!("flowsnet_cli is watching");
         match report_as_md(&mut watchers_map, &mut forked_map, &mut starred_map).await {
             Err(_e) => {
                 log::error!("Error generating report in md: {:?}", _e);

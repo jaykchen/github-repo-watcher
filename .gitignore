@@ -3,3 +3,7 @@ Cargo.lock
 .env
 subscriber.payload.json
 query.json
+flowsnet-cli
+github_repo_watcher.d
+github_repo_watcher.wasm
+.flowsnet.env
